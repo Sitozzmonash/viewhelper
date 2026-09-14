@@ -274,7 +274,12 @@ class AsrPipeline:
 
     def _load_components(self) -> _Components:
         models = self._asr_config.models
-        vad: VadLike = FsmnVad(models.vad, device=models.device, disable_update=models.disable_update)
+        vad: VadLike = FsmnVad(
+            models.vad,
+            device=models.device,
+            disable_update=models.disable_update,
+            max_end_silence_ms=models.max_end_silence_ms,
+        )
         backend = "fsmn-vad"
         if not vad.load():
             energy = self._asr_config.energy_vad

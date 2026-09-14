@@ -62,6 +62,7 @@ class FsmnVad(FunasrComponent):
         device: str = "cpu",
         disable_update: bool = True,
         sample_rate: int = 16000,
+        max_end_silence_ms: int = 800,
     ) -> None:
         super().__init__(
             model,
@@ -69,6 +70,7 @@ class FsmnVad(FunasrComponent):
             disable_update=disable_update,
             sample_rate=sample_rate,
         )
+        self._max_end_silence_ms = max(100, int(max_end_silence_ms))
         self._cache: dict[str, Any] = {}
         self._in_speech = False
         self._elapsed_ms = 0.0
@@ -98,6 +100,7 @@ class FsmnVad(FunasrComponent):
             cache=self._cache,
             is_final=False,
             chunk_size=max(1, int(block_ms)),
+            max_end_silence_time=self._max_end_silence_ms,
         )
         self._elapsed_ms = float(end_ms)
 

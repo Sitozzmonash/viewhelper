@@ -84,6 +84,9 @@ class AsrModelsConfig(BaseModel):
     punctuation: str = "ct-punc"
     device: str = "cpu"
     disable_update: bool = True
+    # Trailing silence FSMN-VAD waits before closing an utterance (FunASR
+    # default: 800). Lower = faster finals, higher risk of cutting pauses.
+    max_end_silence_ms: int = Field(default=800, ge=100, le=5000)
 
 
 class EnergyVadConfig(BaseModel):

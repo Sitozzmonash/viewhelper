@@ -44,6 +44,9 @@ asr:
     device: cpu
     # Skip ModelScope update checks (offline / air-gapped machines).
     disable_update: true
+    # Trailing silence before an utterance is finalized (FunASR default: 800).
+    # Lower = faster finals, higher risk of splitting at short pauses.
+    max_end_silence_ms: 800
   # Fallback VAD used when funasr/torch are unavailable: plain RMS silence
   # detection so the pipeline can still produce finals.
   energy_vad:

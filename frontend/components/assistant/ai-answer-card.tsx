@@ -61,11 +61,25 @@ export function AiAnswerCard({
             </span>
           )}
 
+          {isStreaming && (
+            <button
+              type="button"
+              onClick={onStop}
+              aria-label="停止回答"
+              className="ml-auto flex size-7 items-center justify-center rounded-lg text-destructive transition-colors hover:bg-destructive/10 active:scale-90"
+            >
+              <Square className="size-3.5 fill-current" />
+            </button>
+          )}
+
           <button
             type="button"
             onClick={copy}
             aria-label="复制回答"
-            className="ml-auto flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-ai/10 hover:text-ai-foreground active:scale-90"
+            className={cn(
+              'flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-ai/10 hover:text-ai-foreground active:scale-90',
+              !isStreaming && 'ml-auto',
+            )}
           >
             {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
           </button>
