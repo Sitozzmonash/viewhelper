@@ -22,6 +22,7 @@ from typing import Any
 from src.config.env import EnvConfig
 from src.config.paths import DESKTOP_DIR, resolve_under_data
 from src.config.settings import ConfigStore
+from src.llm.conversation import ConversationTurn
 from src.llm.vision import VisionPayloadError, build_vision_messages, describe_vision_request
 from src.screenshot.capture import (
     CaptureError,
@@ -209,9 +210,13 @@ class ScreenshotService(ServiceBase):
         """Build the vision messages and submit them to the runner."""
         cfg = self._config.config
         provider = self._env.provider_for("screenshot")
+        context = await self._recent_conversation(cfg.conversation.context_messages)
         try:
             messages = build_vision_messages(
-                system_prompt=cfg.prompts.screenshot, image_data_url=image_data_url
+                system_prompt=cfg.prompts.screenshot,
+                image_data_url=image_data_url,
+                resume_context=cfg.resume_context,
+                context=context,
             )
         except VisionPayloadError as exc:
             await self._fail(request_id, str(exc))
@@ -221,7 +226,12 @@ class ScreenshotService(ServiceBase):
             "screenshot request %s for %s: %s",
             request_id,
             screenshot_id,
-            describe_vision_request(image_data_url, provider.model),
+            describe_vision_request(
+                image_data_url,
+                provider.model,
+                context_messages=len(context),
+                resume_chars=len(cfg.resume_context),
+            ),
         )
         job = LlmJob(
             request_id=request_id,
@@ -266,6 +276,15 @@ class ScreenshotService(ServiceBase):
         await self.emit(EventType.SCREENSHOT_CLEARED, {"count": len(records)})
 
     # -- helpers --------------------------------------------------------
+    async def _recent_conversation(self, limit: int) -> list[ConversationTurn]:
+        """Latest final transcripts as vision context (empty on DB failure)."""
+        try:
+            records = await asyncio.to_thread(self._db.recent_messages, limit)
+        except Exception as exc:  # noqa: BLE001 - context is a bonus, never fatal
+            _logger.debug("cannot load conversation context for screenshot: %s", exc)
+            return []
+        return [ConversationTurn.from_record(record) for record in records]
+
     def _load_record(self, screenshot_id: str | None) -> ScreenshotRecord | None:
         """Blocking lookup executed in a worker thread."""
         if screenshot_id:

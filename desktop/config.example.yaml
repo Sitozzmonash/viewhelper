@@ -18,6 +18,11 @@ prompts:
     分析截图内容并直接回答最重要的问题。
     如果截图中包含题目，直接给答案并简要解释。
 
+# resume_context: fixed personal background (resume) injected into BOTH the
+# conversation and screenshot LLM requests. Put real content in the gitignored
+# `config.yaml` only -- it is never sent to the mobile client or the cloud.
+resume_context: ""
+
 conversation:
   # Number of previous FINAL messages sent as context together with the
   # explicitly marked target message (PRD 9). Range: 1..50.

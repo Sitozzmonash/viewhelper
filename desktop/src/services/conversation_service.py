@@ -92,7 +92,10 @@ class ConversationService(ServiceBase):
         context = [ConversationTurn.from_record(record) for record in context_records]
         target = ConversationTurn.from_record(target_record)
         messages = build_conversation_messages(
-            system_prompt=cfg.prompts.conversation, context=context, target=target
+            system_prompt=cfg.prompts.conversation,
+            context=context,
+            target=target,
+            resume_context=cfg.resume_context,
         )
         _logger.info("conversation request %s: %s", request_id, describe_request(target, context))
 

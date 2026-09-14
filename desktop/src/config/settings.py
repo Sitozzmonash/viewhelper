@@ -181,6 +181,9 @@ class AppConfig(BaseModel):
     """Root of ``config.yaml``."""
 
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)
+    # Fixed personal background injected into BOTH conversation and screenshot
+    # requests. Kept local only: never sent to the mobile client or the relay.
+    resume_context: str = ""
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     asr: AsrConfig = Field(default_factory=AsrConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
