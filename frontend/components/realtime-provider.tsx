@@ -23,11 +23,29 @@ import { WsClient } from '@/lib/realtime/ws-client'
 
 const RELAY_URL = (process.env.NEXT_PUBLIC_RELAY_URL ?? '').trim()
 const DEFAULT_RELAY_URL = 'ws://localhost:8000/ws'
+const RELAY_PORT = 8000
+
 /**
- * Demo mode: no backend needed. Used when NEXT_PUBLIC_DEMO=1 or when no relay
- * URL is configured, so the UI can always be demonstrated.
+ * Demo mode is opt-in via NEXT_PUBLIC_DEMO=1 only. An empty relay URL no longer
+ * means "demo" — it means "derive the relay from the page host at runtime".
  */
-const DEMO = process.env.NEXT_PUBLIC_DEMO === '1' || RELAY_URL === ''
+const DEMO = process.env.NEXT_PUBLIC_DEMO === '1'
+
+/**
+ * Resolve the relay WebSocket URL on the client. When NEXT_PUBLIC_RELAY_URL is
+ * baked in (e.g. the Vercel build points at a public relay) we use it verbatim.
+ * Otherwise we derive `ws(s)://<page-host>:8000/ws` from window.location, so a
+ * LAN deployment reaches the relay on the same machine that served the page
+ * without hard-coding the PC's IP into the bundle.
+ */
+function resolveRelayUrl(): string {
+  if (RELAY_URL) return RELAY_URL
+  if (typeof window !== 'undefined' && window.location.hostname) {
+    const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    return `${scheme}://${window.location.hostname}:${RELAY_PORT}/ws`
+  }
+  return DEFAULT_RELAY_URL
+}
 
 interface RealtimeContextValue {
   /** Mobile <-> relay socket lifecycle. */
@@ -71,7 +89,7 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const transport: RealtimeTransport = DEMO
       ? new MockRealtimeClient()
-      : new WsClient(RELAY_URL || DEFAULT_RELAY_URL)
+      : new WsClient(resolveRelayUrl())
     transportRef.current = transport
 
     const unsubscribe = transport.subscribe((event: RealtimeEvent) => {
