@@ -121,7 +121,9 @@ class ServiceBase:
         except Exception as exc:  # noqa: BLE001 - a broken factory must not kill the loop
             self._logger.exception("cannot build task %s: %s", name or "?", exc)
             return None
-        task = asyncio.ensure_future(coroutine, name=name)
+        task = asyncio.ensure_future(coroutine)
+        if name is not None:
+            task.set_name(name)
         self._tasks.add(task)
         task.add_done_callback(self._task_done)
         return task
