@@ -1,0 +1,21 @@
+# Runtime data (SQLite, screenshots)
+data/
+runtime/
+*.sqlite
+*.sqlite3
+*.db
+
+# User configuration (config.example.yaml is the committed template)
+config.yaml
+.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

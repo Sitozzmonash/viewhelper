@@ -1,0 +1,101 @@
+# viewhelper desktop runtime configuration.
+#
+# Copy to `desktop/config.yaml` (that file is gitignored) or edit in place.
+# The mobile settings page can modify: prompts.conversation, prompts.screenshot,
+# conversation.context_messages, asr.hotwords and asr.show_partial -- changes are
+# persisted back to this file by the desktop app.
+
+prompts:
+  # Two completely independent prompts (PRD 8.2 / AC-14): conversation answers
+  # must never use the screenshot prompt and vice versa.
+  conversation: |
+    你是一个实时对话助手。
+    根据当前对话和上下文，直接给出用户现在最适合说出的回答。
+    回答简洁、自然，不要解释过程。
+
+  screenshot: |
+    你是一个截图分析助手。
+    分析截图内容并直接回答最重要的问题。
+    如果截图中包含题目，直接给答案并简要解释。
+
+conversation:
+  # Number of previous FINAL messages sent as context together with the
+  # explicitly marked target message (PRD 9). Range: 1..50.
+  context_messages: 10
+
+asr:
+  # Set to false to run without any local ASR (transport/LLM still work).
+  enabled: true
+  # Hotwords handed to FunASR (space / comma / newline separated).
+  hotwords: ""
+  # Push asr_partial events to the mobile client while speaking.
+  show_partial: true
+  # Minimum interval between two asr_partial events for the same utterance.
+  partial_interval_ms: 300
+  # Hard cap for one utterance; the segment is finalized when exceeded.
+  max_utterance_sec: 20.0
+  # Audio kept before a VAD start point and prepended to the utterance.
+  preroll_ms: 320
+  models:
+    vad: fsmn-vad
+    streaming: paraformer-zh-streaming
+    offline: paraformer-zh
+    punctuation: ct-punc
+    device: cpu
+    # Skip ModelScope update checks (offline / air-gapped machines).
+    disable_update: true
+  # Fallback VAD used when funasr/torch are unavailable: plain RMS silence
+  # detection so the pipeline can still produce finals.
+  energy_vad:
+    threshold_rms: 300.0
+    min_speech_ms: 250
+    end_silence_ms: 700
+
+audio:
+  # Everything is converted to 16 kHz mono int16 for FunASR.
+  sample_rate: 16000
+  # Block length read from the device before being handed to the ASR pipeline.
+  block_ms: 100
+  queue_size: 200
+  # Device selection: null = OS default. Accepts a device name (substring match)
+  # or an integer index. See `python -m src.main --list-audio-devices`.
+  input_device: null
+  loopback_device: null
+
+screenshot:
+  # pynput GlobalHotKeys syntax.
+  hotkey: "<ctrl>+<shift>+<space>"
+  # Ignore repeated triggers (key repeat / double tap) within this window.
+  debounce_sec: 2.0
+  # 0 = primary monitor.
+  monitor_index: 0
+  # Original PNG is stored locally under `dir`; it is never uploaded.
+  dir: data/screenshots
+  preview:
+    max_width: 1280
+    quality: 75
+    format: jpeg
+    target_bytes: 500000
+  # Image actually sent to the vision model (kept in memory only).
+  vision:
+    max_width: 1568
+    quality: 85
+
+storage:
+  database: data/viewhelper.sqlite3
+  # Default limit used for history_sync_response.
+  history_limit: 100
+
+transport:
+  # heartbeat every 5s; the relay marks the PC offline after 15s (PRD 20).
+  heartbeat_interval_sec: 5.0
+  reconnect:
+    initial_sec: 1.0
+    factor: 2.0
+    max_sec: 30.0
+    jitter_sec: 0.0
+  # Outgoing messages queued while a send is in flight; dropped when full.
+  send_queue_size: 256
+
+logging:
+  level: INFO

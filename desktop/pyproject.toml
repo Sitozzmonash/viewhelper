@@ -1,0 +1,76 @@
+[project]
+name = "viewhelper-desktop"
+version = "0.1.0"
+description = "Windows background assistant: dual-channel local streaming ASR (mic + WASAPI loopback), screenshot vision and conversation LLM streaming, bridged to a mobile web UI through a WebSocket relay."
+requires-python = ">=3.11"
+authors = [{ name = "viewhelper" }]
+keywords = ["asr", "llm", "websocket", "windows", "assistant"]
+
+# Core runtime dependencies. Heavy ASR dependencies (funasr / torch / modelscope)
+# live in the optional "asr" extra so the transport/LLM/storage layers stay
+# installable and testable on machines without a deep-learning stack.
+dependencies = [
+    "websockets>=12.0",
+    "httpx>=0.27.0",
+    "sounddevice>=0.4.7",
+    "numpy>=1.26.0",
+    "PyAudioWPatch>=0.2.12.6",
+    "mss>=9.0.1",
+    "pynput>=1.7.7",
+    "pillow>=10.3.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "pyyaml>=6.0.1",
+    "python-dotenv>=1.0.1",
+]
+
+[project.optional-dependencies]
+# Local ASR stack. Install with:  uv sync --extra asr
+# torch is pinned to the CPU wheel index below (see [tool.uv.sources]).
+asr = [
+    "funasr>=1.1.14",
+    "modelscope>=1.20.0",
+    "torch>=2.2.0",
+]
+
+[project.scripts]
+viewhelper-desktop = "src.main:cli"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "respx>=0.21.0",
+    "ruff>=0.5.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+ignore = ["E501"]

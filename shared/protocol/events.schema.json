@@ -1,0 +1,390 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Sitozzmonash/viewhelper/shared/protocol/events.schema.json",
+  "title": "ViewHelper WebSocket Protocol Envelope",
+  "description": "All WebSocket messages between PC desktop, relay and mobile web use this envelope. timestamp is UTC epoch milliseconds.",
+  "type": "object",
+  "required": ["type", "event_id", "device_id", "timestamp"],
+  "properties": {
+    "type": { "type": "string" },
+    "event_id": { "type": "string", "description": "uuid v4" },
+    "device_id": { "type": "string" },
+    "timestamp": { "type": "integer" },
+    "payload": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "auth" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["role", "room", "token"],
+            "properties": {
+              "role": { "enum": ["pc", "mobile"] },
+              "room": { "type": "string" },
+              "token": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "auth_ok" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "room": { "type": "string" },
+              "role": { "enum": ["pc", "mobile"] },
+              "pc_online": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "heartbeat" } } },
+      "then": {
+        "description": "pc -> relay, every 5s",
+        "properties": { "payload": { "type": "object" } }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "presence" } } },
+      "then": {
+        "description": "relay -> mobile. pc considered offline after 15s without heartbeat",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["pc_online"],
+            "properties": { "pc_online": { "type": "boolean" } }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "asr_partial" } } },
+      "then": {
+        "description": "pc -> mobile. Mobile updates the bubble with same utterance_id in place.",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["speaker", "utterance_id", "text"],
+            "properties": {
+              "speaker": { "enum": ["me", "other"] },
+              "utterance_id": { "type": "string" },
+              "text": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "asr_final" } } },
+      "then": {
+        "description": "pc -> mobile. Final message for utterance_id, persisted in PC SQLite.",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["speaker", "utterance_id", "message_id", "text", "created_at"],
+            "properties": {
+              "speaker": { "enum": ["me", "other"] },
+              "utterance_id": { "type": "string" },
+              "message_id": { "type": "string" },
+              "text": { "type": "string" },
+              "started_at": { "type": ["integer", "null"] },
+              "ended_at": { "type": ["integer", "null"] },
+              "duration_sec": { "type": ["number", "null"] },
+              "created_at": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "history_sync_request" } } },
+      "then": {
+        "description": "mobile -> pc after (re)connect",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": { "limit": { "type": "integer", "default": 100 } }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "history_sync_response" } } },
+      "then": {
+        "description": "pc -> mobile",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["messages", "screenshots", "ai_answers"],
+            "properties": {
+              "messages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "message_id": { "type": "string" },
+                    "speaker": { "enum": ["me", "other"] },
+                    "text": { "type": "string" },
+                    "created_at": { "type": "integer" },
+                    "duration_sec": { "type": ["number", "null"] }
+                  }
+                }
+              },
+              "screenshots": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "screenshot_id": { "type": "string" },
+                    "preview": { "type": ["string", "null"], "description": "data url, only for the latest screenshot" },
+                    "created_at": { "type": "integer" }
+                  }
+                }
+              },
+              "ai_answers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "request_id": { "type": "string" },
+                    "mode": { "enum": ["conversation", "screenshot"] },
+                    "target_id": { "type": ["string", "null"] },
+                    "answer": { "type": "string" },
+                    "status": { "enum": ["done", "cancelled", "error"] },
+                    "tokens_per_second": { "type": ["number", "null"] },
+                    "created_at": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "conversation_clear" } } },
+      "then": { "description": "mobile -> pc: delete all conversation messages" }
+    },
+    {
+      "if": { "properties": { "type": { "const": "conversation_cleared" } } },
+      "then": { "description": "pc -> mobile ack after SQLite delete" }
+    },
+    {
+      "if": { "properties": { "type": { "const": "screenshot_clear" } } },
+      "then": { "description": "mobile -> pc: delete all screenshot history" }
+    },
+    {
+      "if": { "properties": { "type": { "const": "screenshot_cleared" } } },
+      "then": { "description": "pc -> mobile ack after SQLite + file delete" }
+    },
+    {
+      "if": { "properties": { "type": { "const": "screenshot_created" } } },
+      "then": {
+        "description": "pc -> mobile. preview is a compressed data url (max width 1280, webp/jpeg, q70-80, ~500KB).",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["screenshot_id", "preview", "captured_at"],
+            "properties": {
+              "screenshot_id": { "type": "string" },
+              "preview": { "type": "string" },
+              "captured_at": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "screenshot_delete" } } },
+      "then": {
+        "description": "mobile -> pc: delete one screenshot",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["screenshot_id"],
+            "properties": { "screenshot_id": { "type": "string" } }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "capture_screen" } } },
+      "then": { "description": "mobile -> pc: trigger the same flow as the hotkey" }
+    },
+    {
+      "if": { "properties": { "type": { "const": "llm_request" } } },
+      "then": {
+        "description": "mobile -> pc",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["request_id", "mode"],
+            "properties": {
+              "request_id": { "type": "string" },
+              "mode": { "enum": ["conversation", "screenshot"] },
+              "message_id": { "type": ["string", "null"], "description": "required when mode=conversation" },
+              "screenshot_id": { "type": ["string", "null"], "description": "optional when mode=screenshot, defaults to latest" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "llm_started" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["request_id", "mode"],
+            "properties": {
+              "request_id": { "type": "string" },
+              "mode": { "enum": ["conversation", "screenshot"] }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "llm_chunk" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["request_id", "delta"],
+            "properties": {
+              "request_id": { "type": "string" },
+              "delta": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "llm_stats" } } },
+      "then": {
+        "description": "pc -> mobile, about every 500ms while streaming",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["request_id", "tokens_per_second"],
+            "properties": {
+              "request_id": { "type": "string" },
+              "tokens_per_second": { "type": "number" },
+              "elapsed_ms": { "type": "integer" },
+              "estimated_tokens": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "llm_done" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["request_id", "completion_tokens", "elapsed_ms", "tokens_per_second"],
+            "properties": {
+              "request_id": { "type": "string" },
+              "completion_tokens": { "type": "integer" },
+              "elapsed_ms": { "type": "integer" },
+              "tokens_per_second": { "type": "number" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "llm_cancel" } } },
+      "then": {
+        "description": "mobile -> pc. PC must cancel the asyncio task and close the upstream HTTP stream.",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["request_id"],
+            "properties": { "request_id": { "type": "string" } }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "llm_cancelled" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["request_id"],
+            "properties": { "request_id": { "type": "string" } }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "llm_error" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["request_id", "message"],
+            "properties": {
+              "request_id": { "type": "string" },
+              "message": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "settings_get" } } },
+      "then": { "description": "mobile -> pc" }
+    },
+    {
+      "if": { "properties": { "type": { "const": "settings_update" } } },
+      "then": {
+        "description": "mobile -> pc. PC persists to config.yaml. API keys are never transferred.",
+        "properties": { "payload": { "$ref": "#/$defs/settings" } }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "settings_updated" } } },
+      "then": {
+        "description": "pc -> mobile (ack of settings_update, or response to settings_get)",
+        "properties": { "payload": { "$ref": "#/$defs/settings" } }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "error" } } },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["message"],
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "settings": {
+      "type": "object",
+      "properties": {
+        "conversation_prompt": { "type": "string" },
+        "screenshot_prompt": { "type": "string" },
+        "context_messages": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "hotwords": { "type": "string" },
+        "show_partial": { "type": "boolean" }
+      }
+    }
+  }
+}
