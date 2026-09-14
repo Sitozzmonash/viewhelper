@@ -167,38 +167,55 @@ class LlmRunner:
         final: FinalStats | None = None
         client = self._client_for(job.provider)
 
+        # Wall-clock budget for the whole request. httpx's per-read timeout never
+        # fires when a stalled provider dribbles keep-alives after a 200 OK, which
+        # would otherwise pin the single active slot forever: one hung request
+        # would make every later answer get rejected as "still active".
+        deadline = job.provider.timeout_sec
         await self._emit(EventType.LLM_STARTED, {"request_id": job.request_id, "mode": job.mode})
         try:
             tracker.start()
-            # aclosing guarantees the HTTP stream is closed on cancellation,
-            # which is what makes "stop answering" real (PRD 11).
-            async with aclosing(client.stream_chat(job.messages, model=job.model)) as stream:
-                async for event in stream:
-                    if event.delta:
-                        parts.append(event.delta)
-                        tracker.add(event.delta)
-                        await self._emit(
-                            EventType.LLM_CHUNK,
-                            {"request_id": job.request_id, "delta": event.delta},
-                        )
-                    if event.usage is not None and event.usage.completion_tokens is not None:
-                        provider_tokens = event.usage.completion_tokens
-                        tracker.set_usage(provider_tokens)
-                    if tracker.should_emit():
-                        snapshot = tracker.snapshot()
-                        await self._emit(
-                            EventType.LLM_STATS,
-                            {
-                                "request_id": job.request_id,
-                                "tokens_per_second": snapshot.tokens_per_second,
-                                "elapsed_ms": snapshot.elapsed_ms,
-                                "estimated_tokens": snapshot.estimated_tokens,
-                            },
-                        )
+            async with asyncio.timeout(deadline):
+                # aclosing guarantees the HTTP stream is closed on cancellation,
+                # which is what makes "stop answering" real (PRD 11).
+                async with aclosing(client.stream_chat(job.messages, model=job.model)) as stream:
+                    async for event in stream:
+                        if event.delta:
+                            parts.append(event.delta)
+                            tracker.add(event.delta)
+                            await self._emit(
+                                EventType.LLM_CHUNK,
+                                {"request_id": job.request_id, "delta": event.delta},
+                            )
+                        if event.usage is not None and event.usage.completion_tokens is not None:
+                            provider_tokens = event.usage.completion_tokens
+                            tracker.set_usage(provider_tokens)
+                        if tracker.should_emit():
+                            snapshot = tracker.snapshot()
+                            await self._emit(
+                                EventType.LLM_STATS,
+                                {
+                                    "request_id": job.request_id,
+                                    "tokens_per_second": snapshot.tokens_per_second,
+                                    "elapsed_ms": snapshot.elapsed_ms,
+                                    "estimated_tokens": snapshot.estimated_tokens,
+                                },
+                            )
         except asyncio.CancelledError:
             status = "cancelled"
             self._logger.info("llm request %s cancelled by user", job.request_id)
             raise
+        except TimeoutError:
+            # asyncio.timeout deadline: the provider stalled mid-stream. Release
+            # the slot (finally) and surface one llm_error so the client stops
+            # waiting and the user can retry instead of being blocked forever.
+            status = "error"
+            error_message = f"provider did not finish within {deadline:g}s"
+            self._logger.warning(
+                "llm request %s aborted: no completion within %gs (wall-clock timeout)",
+                job.request_id,
+                deadline,
+            )
         except LLMError as exc:
             status = "error"
             error_message = redact(exc.message)
