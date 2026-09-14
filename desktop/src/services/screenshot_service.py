@@ -238,6 +238,7 @@ class ScreenshotService(ServiceBase):
             mode="screenshot",
             messages=messages,
             provider=provider,
+            fallback=self._env.fallback_for("screenshot"),
             target_id=screenshot_id,
         )
         result = await self._runner.submit(job)

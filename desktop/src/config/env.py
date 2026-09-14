@@ -84,6 +84,10 @@ class ProviderCredentials(BaseModel):
     model: str = ""
     timeout_sec: float = Field(default=180.0, gt=0)
     connect_timeout_sec: float = Field(default=15.0, gt=0)
+    #: Max seconds to wait for the next streamed event (incl. the first token)
+    #: before treating the provider as stalled. Per-provider on purpose: a fast
+    #: primary should fail quickly and hand off, a slow backup needs more room.
+    stall_timeout_sec: float = Field(default=30.0, gt=0)
     max_tokens: int | None = Field(default=None, gt=0)
     temperature: float | None = None
     include_usage: bool = True
@@ -130,6 +134,10 @@ class EnvConfig(BaseModel):
 
     llm: ProviderCredentials = Field(default_factory=ProviderCredentials)
     vision: ProviderCredentials = Field(default_factory=ProviderCredentials)
+    #: Optional backup endpoints. When set, the LLM runner automatically retries
+    #: a request on the fallback provider if the primary errors or stalls.
+    llm_fallback: ProviderCredentials = Field(default_factory=ProviderCredentials)
+    vision_fallback: ProviderCredentials = Field(default_factory=ProviderCredentials)
     relay: RelayCredentials = Field(default_factory=RelayCredentials)
     log_level: str = "INFO"
     loaded_files: tuple[Path, ...] = ()
@@ -137,6 +145,24 @@ class EnvConfig(BaseModel):
     def provider_for(self, mode: str) -> ProviderCredentials:
         """Return the credentials for ``conversation`` or ``screenshot`` mode."""
         return self.vision if mode == "screenshot" else self.llm
+
+    def fallback_for(self, mode: str) -> ProviderCredentials | None:
+        """Return the backup credentials for a mode, or ``None`` when unset.
+
+        A fallback identical to the primary (or not configured) is suppressed so
+        the runner never retries the same dead endpoint twice.
+        """
+        primary = self.provider_for(mode)
+        backup = self.vision_fallback if mode == "screenshot" else self.llm_fallback
+        if not backup.is_configured:
+            return None
+        if (backup.base_url, backup.model, backup.api_key) == (
+            primary.base_url,
+            primary.model,
+            primary.api_key,
+        ):
+            return None
+        return backup
 
 
 class _RawEnv(BaseSettings):
@@ -153,6 +179,16 @@ class _RawEnv(BaseSettings):
     vision_api_key: str = ""
     vision_base_url: str = ""
     vision_model: str = ""
+    # Backup providers (BK_MODEL_* is the legacy alias, like MODEL_* for LLM_*).
+    bk_llm_api_key: str = ""
+    bk_llm_base_url: str = ""
+    bk_llm_model: str = ""
+    bk_model_api_key: str = ""
+    bk_model_base_url: str = ""
+    bk_model_name: str = ""
+    bk_vision_api_key: str = ""
+    bk_vision_base_url: str = ""
+    bk_vision_model: str = ""
     relay_url: str = ""
     relay_device_id: str = "my-pc"
     relay_room: str = "my-pc"
@@ -161,12 +197,20 @@ class _RawEnv(BaseSettings):
 
     llm_timeout_sec: float = 180.0
     llm_connect_timeout_sec: float = 15.0
+    llm_stall_timeout_sec: float = 30.0
     llm_max_tokens: int | None = None
     llm_temperature: float | None = None
     vision_timeout_sec: float = 180.0
     vision_connect_timeout_sec: float = 15.0
+    vision_stall_timeout_sec: float = 30.0
     vision_max_tokens: int | None = None
     vision_temperature: float | None = None
+    bk_llm_timeout_sec: float = 180.0
+    bk_llm_connect_timeout_sec: float = 15.0
+    bk_llm_stall_timeout_sec: float = 30.0
+    bk_vision_timeout_sec: float = 180.0
+    bk_vision_connect_timeout_sec: float = 15.0
+    bk_vision_stall_timeout_sec: float = 30.0
 
     def _first(self, *values: str) -> str:
         for value in values:
@@ -183,6 +227,7 @@ class _RawEnv(BaseSettings):
             model=self._first(self.llm_model, self.model_name),
             timeout_sec=self.llm_timeout_sec,
             connect_timeout_sec=self.llm_connect_timeout_sec,
+            stall_timeout_sec=self.llm_stall_timeout_sec,
             max_tokens=self.llm_max_tokens,
             temperature=self.llm_temperature,
         )
@@ -193,6 +238,7 @@ class _RawEnv(BaseSettings):
             model=self._first(self.vision_model, llm.model),
             timeout_sec=self.vision_timeout_sec,
             connect_timeout_sec=self.vision_connect_timeout_sec,
+            stall_timeout_sec=self.vision_stall_timeout_sec,
             max_tokens=self.vision_max_tokens,
             temperature=self.vision_temperature,
         )
@@ -202,9 +248,27 @@ class _RawEnv(BaseSettings):
             room=self._first(self.relay_room) or self._first(self.relay_device_id) or "my-pc",
             secret=self.relay_secret.strip(),
         )
+        llm_fallback = ProviderCredentials(
+            api_key=self._first(self.bk_llm_api_key, self.bk_model_api_key),
+            base_url=self._first(self.bk_llm_base_url, self.bk_model_base_url),
+            model=self._first(self.bk_llm_model, self.bk_model_name),
+            timeout_sec=self.bk_llm_timeout_sec,
+            connect_timeout_sec=self.bk_llm_connect_timeout_sec,
+            stall_timeout_sec=self.bk_llm_stall_timeout_sec,
+        )
+        vision_fallback = ProviderCredentials(
+            api_key=self._first(self.bk_vision_api_key, llm_fallback.api_key),
+            base_url=self._first(self.bk_vision_base_url, llm_fallback.base_url),
+            model=self._first(self.bk_vision_model, llm_fallback.model),
+            timeout_sec=self.bk_vision_timeout_sec,
+            connect_timeout_sec=self.bk_vision_connect_timeout_sec,
+            stall_timeout_sec=self.bk_vision_stall_timeout_sec,
+        )
         return EnvConfig(
             llm=llm,
             vision=vision,
+            llm_fallback=llm_fallback,
+            vision_fallback=vision_fallback,
             relay=relay,
             log_level=self._first(self.log_level) or "INFO",
             loaded_files=loaded_files,
@@ -226,5 +290,9 @@ def load_env_config(base_dir: Path | None = None, *, prime: bool = True) -> EnvC
     )
     _logger.info("conversation provider: %s", config.llm.describe())
     _logger.info("vision provider: %s", config.vision.describe())
+    if config.llm_fallback.is_configured:
+        _logger.info("conversation fallback: %s", config.llm_fallback.describe())
+    if config.vision_fallback.is_configured:
+        _logger.info("vision fallback: %s", config.vision_fallback.describe())
     _logger.info("relay: %s", config.relay.describe())
     return config

@@ -104,6 +104,7 @@ class ConversationService(ServiceBase):
             mode="conversation",
             messages=messages,
             provider=self._env.provider_for("conversation"),
+            fallback=self._env.fallback_for("conversation"),
             target_id=target_record.id,
         )
         result = await self._runner.submit(job)

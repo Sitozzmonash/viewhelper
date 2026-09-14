@@ -16,13 +16,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any
 
 from src.config.env import ProviderCredentials
-from src.llm.client import ChatMessage, LLMError, OpenAICompatClient
+from src.llm.client import ChatMessage, LLMError, LLMTimeoutError, OpenAICompatClient
 from src.llm.token_stats import FinalStats, TokenStatsTracker
 from src.storage.models import AnswerMode, AnswerStatus
 from src.storage.sqlite import Database
@@ -46,6 +47,7 @@ class LlmJob:
     mode: AnswerMode
     messages: list[ChatMessage]
     provider: ProviderCredentials
+    fallback: ProviderCredentials | None = None
     target_id: str | None = None
     model: str | None = None
     created_at: int = field(default_factory=utc_now_ms)
@@ -62,6 +64,24 @@ class SubmitResult:
 
     accepted: bool
     reason: str | None = None
+
+
+@dataclass(slots=True)
+class _AttemptState:
+    """Live state of a single provider attempt, mutated while streaming."""
+
+    provider: ProviderCredentials
+    model: str
+    tracker: TokenStatsTracker
+    parts: list[str] = field(default_factory=list)
+    provider_tokens: int | None = None
+    #: True once any delta reached the client. A fallback is only safe while this
+    #: is False, otherwise the retry would duplicate already-streamed text.
+    emitted: bool = False
+
+    @property
+    def text(self) -> str:
+        return "".join(self.parts)
 
 
 ClientFactory = Callable[[ProviderCredentials], OpenAICompatClient]
@@ -118,17 +138,18 @@ class LlmRunner:
                     self._active.request_id,
                 )
                 return SubmitResult(False, BUSY_MESSAGE)
-            if not job.provider.is_configured:
+            if not job.provider.is_configured and not (job.fallback and job.fallback.is_configured):
                 self._logger.error("cannot run %s: %s", job.request_id, NOT_CONFIGURED_MESSAGE)
                 return SubmitResult(False, NOT_CONFIGURED_MESSAGE)
             self._active = job
             self._task = asyncio.create_task(self._run(job), name=f"llm-{job.request_id}")
         self._logger.info(
-            "llm request %s started (mode=%s model=%s target=%s)",
+            "llm request %s started (mode=%s model=%s target=%s fallback=%s)",
             job.request_id,
             job.mode,
             job.resolved_model,
             job.target_id,
+            job.fallback.model if (job.fallback and job.fallback.is_configured) else "none",
         )
         return SubmitResult(True)
 
@@ -158,77 +179,76 @@ class LlmRunner:
                 await client.aclose()
 
     # -- execution ------------------------------------------------------
-    async def _run(self, job: LlmJob) -> None:
-        tracker = TokenStatsTracker(interval_sec=self._stats_interval)
-        parts: list[str] = []
-        status: AnswerStatus = "done"
-        error_message: str | None = None
-        provider_tokens: int | None = None
-        final: FinalStats | None = None
-        client = self._client_for(job.provider)
+    def _provider_chain(self, job: LlmJob) -> list[ProviderCredentials]:
+        """Ordered providers to try: primary first, then a distinct fallback."""
+        chain: list[ProviderCredentials] = []
+        if job.provider.is_configured:
+            chain.append(job.provider)
+        fb = job.fallback
+        if fb is not None and fb.is_configured:
+            key = (fb.base_url, fb.model, fb.api_key)
+            if not any((p.base_url, p.model, p.api_key) == key for p in chain):
+                chain.append(fb)
+        return chain
 
-        # Wall-clock budget for the whole request. httpx's per-read timeout never
-        # fires when a stalled provider dribbles keep-alives after a 200 OK, which
-        # would otherwise pin the single active slot forever: one hung request
-        # would make every later answer get rejected as "still active".
-        deadline = job.provider.timeout_sec
+    async def _run(self, job: LlmJob) -> None:
+        attempts = self._provider_chain(job)
         await self._emit(EventType.LLM_STARTED, {"request_id": job.request_id, "mode": job.mode})
+
+        status: AnswerStatus = "error"
+        error_message: str | None = "no provider available"
+        state: _AttemptState | None = None
+        final: FinalStats | None = None
+
         try:
-            tracker.start()
-            async with asyncio.timeout(deadline):
-                # aclosing guarantees the HTTP stream is closed on cancellation,
-                # which is what makes "stop answering" real (PRD 11).
-                async with aclosing(client.stream_chat(job.messages, model=job.model)) as stream:
-                    async for event in stream:
-                        if event.delta:
-                            parts.append(event.delta)
-                            tracker.add(event.delta)
-                            await self._emit(
-                                EventType.LLM_CHUNK,
-                                {"request_id": job.request_id, "delta": event.delta},
-                            )
-                        if event.usage is not None and event.usage.completion_tokens is not None:
-                            provider_tokens = event.usage.completion_tokens
-                            tracker.set_usage(provider_tokens)
-                        if tracker.should_emit():
-                            snapshot = tracker.snapshot()
-                            await self._emit(
-                                EventType.LLM_STATS,
-                                {
-                                    "request_id": job.request_id,
-                                    "tokens_per_second": snapshot.tokens_per_second,
-                                    "elapsed_ms": snapshot.elapsed_ms,
-                                    "estimated_tokens": snapshot.estimated_tokens,
-                                },
-                            )
-        except asyncio.CancelledError:
-            status = "cancelled"
-            self._logger.info("llm request %s cancelled by user", job.request_id)
-            raise
-        except TimeoutError:
-            # asyncio.timeout deadline: the provider stalled mid-stream. Release
-            # the slot (finally) and surface one llm_error so the client stops
-            # waiting and the user can retry instead of being blocked forever.
-            status = "error"
-            error_message = f"provider did not finish within {deadline:g}s"
-            self._logger.warning(
-                "llm request %s aborted: no completion within %gs (wall-clock timeout)",
-                job.request_id,
-                deadline,
-            )
-        except LLMError as exc:
-            status = "error"
-            error_message = redact(exc.message)
-            self._logger.warning("llm request %s failed: %s", job.request_id, error_message)
-        except Exception as exc:  # noqa: BLE001 - never let a request kill the app
-            status = "error"
-            error_message = redact(f"{type(exc).__name__}: {exc}")
-            self._logger.exception("llm request %s crashed", job.request_id)
+            for index, provider in enumerate(attempts):
+                is_last = index == len(attempts) - 1
+                tracker = TokenStatsTracker(interval_sec=self._stats_interval)
+                state = _AttemptState(
+                    provider=provider,
+                    model=job.model or provider.model,
+                    tracker=tracker,
+                )
+                tracker.start()
+                try:
+                    await self._stream_attempt(job, provider, state)
+                except asyncio.CancelledError:
+                    status = "cancelled"
+                    self._logger.info("llm request %s cancelled by user", job.request_id)
+                    raise
+                except LLMError as exc:
+                    status = "error"
+                    error_message = redact(exc.message)
+                    self._logger.warning(
+                        "llm request %s failed on %s: %s", job.request_id, provider.model, error_message
+                    )
+                except Exception as exc:  # noqa: BLE001 - never let a request kill the app
+                    status = "error"
+                    error_message = redact(f"{type(exc).__name__}: {exc}")
+                    self._logger.exception("llm request %s crashed on %s", job.request_id, provider.model)
+                else:
+                    status = "done"
+                    error_message = None
+                    break
+
+                # Retry on the backup only when the primary produced nothing yet;
+                # once deltas reached the client a retry would duplicate text.
+                if not is_last and not state.emitted:
+                    self._logger.warning(
+                        "llm request %s: %s unavailable (%s); falling back to %s",
+                        job.request_id,
+                        provider.model,
+                        error_message,
+                        attempts[index + 1].model,
+                    )
+                    continue
+                break
         finally:
             # Synchronous on purpose: this must also run when the task is being
             # cancelled (no awaits allowed in that path).
-            final = tracker.finalize(provider_tokens)
-            self._persist(job, status, "".join(parts), final, error_message)
+            if state is not None:
+                final = state.tracker.finalize(state.provider_tokens)
+                self._persist(job, status, state.text, final, error_message, state.model)
             self._clear_active(job.request_id)
 
         if status == "done" and final is not None:
@@ -242,18 +262,79 @@ class LlmRunner:
                 },
             )
             self._logger.info(
-                "llm request %s done: %d tokens in %dms (%.1f token/s, provider_usage=%s)",
+                "llm request %s done: %d tokens in %dms (%.1f token/s, provider_usage=%s, model=%s)",
                 job.request_id,
                 final.completion_tokens,
                 final.elapsed_ms,
                 final.tokens_per_second,
                 final.from_provider_usage,
+                state.model if state else job.resolved_model,
             )
         elif status == "error":
             await self._emit(
                 EventType.LLM_ERROR,
                 {"request_id": job.request_id, "message": error_message or "unknown error"},
             )
+
+    async def _stream_attempt(
+        self, job: LlmJob, provider: ProviderCredentials, state: _AttemptState
+    ) -> None:
+        """Stream one provider attempt into *state*, emitting chunk/stats events.
+
+        A per-event budget of ``min(stall_timeout, remaining wall-clock)`` makes a
+        provider that accepts the request but never sends a first token fail fast
+        (so the fallback kicks in quickly) while still capping total runtime.
+        """
+        client = self._client_for(provider)
+        deadline = provider.timeout_sec
+        stall = provider.stall_timeout_sec
+        started = time.monotonic()
+        # aclosing guarantees the HTTP stream is closed on cancellation, which is
+        # what makes "stop answering" real (PRD 11).
+        async with aclosing(client.stream_chat(job.messages, model=job.model)) as stream:
+            iterator = stream.__aiter__()
+            while True:
+                elapsed = time.monotonic() - started
+                remaining = deadline - elapsed
+                if remaining <= 0:
+                    raise LLMTimeoutError(f"provider did not finish within {deadline:g}s")
+                budget = stall if stall < remaining else remaining
+                try:
+                    async with asyncio.timeout(budget):
+                        event = await iterator.__anext__()
+                except StopAsyncIteration:
+                    break
+                except TimeoutError:
+                    if time.monotonic() - started >= deadline:
+                        raise LLMTimeoutError(
+                            f"provider did not finish within {deadline:g}s"
+                        ) from None
+                    raise LLMTimeoutError(
+                        f"provider stalled: no data within {stall:g}s"
+                    ) from None
+
+                if event.delta:
+                    state.parts.append(event.delta)
+                    state.emitted = True
+                    state.tracker.add(event.delta)
+                    await self._emit(
+                        EventType.LLM_CHUNK,
+                        {"request_id": job.request_id, "delta": event.delta},
+                    )
+                if event.usage is not None and event.usage.completion_tokens is not None:
+                    state.provider_tokens = event.usage.completion_tokens
+                    state.tracker.set_usage(state.provider_tokens)
+                if state.tracker.should_emit():
+                    snapshot = state.tracker.snapshot()
+                    await self._emit(
+                        EventType.LLM_STATS,
+                        {
+                            "request_id": job.request_id,
+                            "tokens_per_second": snapshot.tokens_per_second,
+                            "elapsed_ms": snapshot.elapsed_ms,
+                            "estimated_tokens": snapshot.estimated_tokens,
+                        },
+                    )
 
     # -- helpers --------------------------------------------------------
     def _client_for(self, provider: ProviderCredentials) -> OpenAICompatClient:
@@ -280,13 +361,14 @@ class LlmRunner:
         answer: str,
         final: Any,
         error_message: str | None,
+        model: str | None = None,
     ) -> None:
         try:
             self._db.insert_ai_answer(
                 request_id=job.request_id,
                 mode=job.mode,
                 target_id=job.target_id,
-                model=job.resolved_model,
+                model=model or job.resolved_model,
                 answer=answer,
                 completion_tokens=int(final.completion_tokens),
                 estimated_tokens=int(final.estimated_tokens),

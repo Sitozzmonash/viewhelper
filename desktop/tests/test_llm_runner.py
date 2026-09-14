@@ -73,6 +73,39 @@ class EchoClient:
         return None
 
 
+class DeadClient:
+    """Fake client that accepts the request but never streams a byte.
+
+    Mirrors the DeepSeek outage symptom: ``200 OK`` then an empty, hung body.
+    """
+
+    def __init__(self, provider: ProviderCredentials) -> None:
+        self._provider = provider
+
+    @property
+    def model(self) -> str:
+        return self._provider.model
+
+    async def stream_chat(
+        self, messages: Any, *, model: str | None = None, extra: Any = None
+    ) -> AsyncIterator[StreamEvent]:
+        await asyncio.sleep(30)  # never yields; only the deadline ends it
+        yield StreamEvent(delta="unreachable")  # pragma: no cover - never reached
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _model_provider(model: str, timeout_sec: float, base_url: str = "https://llm.test/v1") -> ProviderCredentials:
+    return ProviderCredentials(
+        api_key="sk-test-abcdef123456",
+        base_url=base_url,
+        model=model,
+        timeout_sec=timeout_sec,
+        connect_timeout_sec=0.1,
+    )
+
+
 async def _wait_until(
     predicate: Callable[[], bool], *, timeout: float = 3.0, interval: float = 0.01
 ) -> bool:
@@ -162,5 +195,69 @@ async def test_normal_stream_completes_and_emits_done(
     assert transport.count("llm_error") == 0
     chunks = transport.payloads("llm_chunk")
     assert "".join(chunk["delta"] for chunk in chunks) == "你好"
+
+    await runner.shutdown()
+
+
+def _routing_factory(mapping: dict[str, Callable[[ProviderCredentials], Any]]) -> Callable[[ProviderCredentials], Any]:
+    def factory(provider: ProviderCredentials) -> Any:
+        return mapping[provider.model](provider)
+
+    return factory
+
+
+async def test_dead_primary_falls_back_to_backup(database: Database, transport: Any) -> None:
+    """A primary that hangs with zero output must auto-retry on the fallback."""
+    runner = LlmRunner(
+        transport=transport,
+        db=database,
+        client_factory=_routing_factory({"dead-primary": DeadClient, "backup-echo": EchoClient}),
+    )
+    job = LlmJob(
+        request_id="req-fallback",
+        mode="conversation",
+        messages=MESSAGES,
+        provider=_model_provider("dead-primary", timeout_sec=0.3),
+        fallback=_model_provider("backup-echo", timeout_sec=5.0, base_url="https://backup.test/v1"),
+    )
+    assert (await runner.submit(job)).accepted
+
+    assert await _wait_until(lambda: not runner.is_busy, timeout=3.0)
+    # Exactly one answer, produced by the fallback; no duplicate text, no error.
+    assert transport.count("llm_done") == 1
+    assert transport.count("llm_error") == 0
+    chunks = transport.payloads("llm_chunk")
+    assert "".join(chunk["delta"] for chunk in chunks) == "你好"
+
+    record = database.get_ai_answer("req-fallback")
+    assert record is not None
+    assert record.model == "backup-echo"
+    assert record.status == "done"
+
+    await runner.shutdown()
+
+
+async def test_no_fallback_after_partial_stream(database: Database, transport: Any) -> None:
+    """Once the primary streamed a delta, a retry would duplicate text: don't fall back."""
+    runner = LlmRunner(
+        transport=transport,
+        db=database,
+        client_factory=_routing_factory({"hang-after-one": HangingClient, "backup-echo": EchoClient}),
+    )
+    job = LlmJob(
+        request_id="req-partial",
+        mode="conversation",
+        messages=MESSAGES,
+        provider=_model_provider("hang-after-one", timeout_sec=0.3),
+        fallback=_model_provider("backup-echo", timeout_sec=5.0, base_url="https://backup.test/v1"),
+    )
+    assert (await runner.submit(job)).accepted
+
+    assert await _wait_until(lambda: not runner.is_busy, timeout=3.0)
+    assert transport.count("llm_error") == 1
+    assert transport.count("llm_done") == 0
+    # Only the primary's partial reached the client; the backup was never used.
+    chunks = transport.payloads("llm_chunk")
+    assert "".join(chunk["delta"] for chunk in chunks) == "partial"
 
     await runner.shutdown()
