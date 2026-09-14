@@ -29,6 +29,7 @@ dependencies = [
 # torch is pinned to the CPU wheel index below (see [tool.uv.sources]).
 asr = [
     "funasr>=1.1.14",
+    "kaldi-native-fbank>=1.19",
     "modelscope>=1.20.0",
     "torch>=2.2.0",
 ]
