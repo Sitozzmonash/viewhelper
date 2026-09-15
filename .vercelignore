@@ -1,0 +1,21 @@
+# Deploy only the frontend (project Root Directory = frontend).
+# Keep frontend/api/app (vendored relay) even though .gitignore excludes it.
+.git
+backend
+desktop
+docs
+scripts
+shared
+
+# heavy / generated
+frontend/node_modules
+frontend/.next
+frontend/.vercel
+**/__pycache__
+**/*.tsbuildinfo
+
+# local env / secrets (cloud build uses project env vars)
+.env
+*.env
+.env*.local
+frontend/.env.local
