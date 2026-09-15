@@ -24,11 +24,13 @@ prompts:
 resume_context: ""
 
 # resume: a short, toggleable instruction inserted into both system prompts
-# telling the model it may draw on the resume (Summary.md). The hint TEXT is not
-# secret, but keep it here (PC-side) rather than on the mobile client.
+# telling the model to use the resume text already injected above it (the
+# 【resume_context】 block). The model has no filesystem, so do NOT point it at a
+# file name. The hint is only added when resume_context is non-empty. The hint
+# TEXT is not secret, but keep it here (PC-side) rather than on the mobile client.
 resume:
   hint_enabled: true
-  hint_text: "在回答涉及我的经历、项目或能力的问题时，可以参考我的简历 Summary.md 来组织答案。"
+  hint_text: "在回答涉及我的经历、项目或能力的问题时，请结合上面【resume_context】中的简历内容来组织答案。"
 
 conversation:
   # Number of previous FINAL messages sent as context together with the

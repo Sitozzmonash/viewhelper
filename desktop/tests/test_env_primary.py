@@ -3,7 +3,8 @@
 The MODEL_* block is the default primary and BK_MODEL_* the fallback; setting
 ``LLM_PRIMARY`` to a backup token (or the backup model name) swaps them so the
 user can pick kimi or deepseek as primary while the other auto-falls-back.
-Vision is never swapped (DeepSeek cannot see images).
+Vision shares the conversation chain (deepseek-flash supports images) and follows
+the same swap, unless VISION_* explicitly overrides it.
 """
 
 from __future__ import annotations
@@ -19,9 +20,6 @@ def _raw(**overrides: object) -> _RawEnv:
         "bk_model_name": "kimi-k3",
         "bk_model_base_url": "https://vectide.cn/v1",
         "bk_model_api_key": "sk-backup",
-        "vision_model": "kimi-k3",
-        "vision_base_url": "https://vectide.cn/v1",
-        "vision_api_key": "sk-vision",
     }
     base.update(overrides)
     return _RawEnv(**base)  # type: ignore[arg-type]
@@ -48,10 +46,28 @@ def test_model_name_hint_selects_provider() -> None:
     assert _raw(llm_primary="deepseek").to_config(()).llm.model == "deepseek-flash"
 
 
-def test_vision_is_never_swapped() -> None:
+def test_vision_mirrors_conversation_when_unset() -> None:
+    cfg = _raw().to_config(())
+    assert cfg.vision.model == "deepseek-flash"
+    assert cfg.provider_for("screenshot").model == "deepseek-flash"
+
+
+def test_vision_follows_the_primary_swap() -> None:
     cfg = _raw(llm_primary="kimi").to_config(())
     assert cfg.vision.model == "kimi-k3"
     assert cfg.provider_for("screenshot").model == "kimi-k3"
+    # screenshot fallback resolves the other provider, same as conversation.
+    assert cfg.fallback_for("screenshot").model == "deepseek-flash"
+
+
+def test_explicit_vision_override_wins() -> None:
+    cfg = _raw(
+        llm_primary="kimi",
+        vision_model="gpt-4o",
+        vision_base_url="https://openai.example/v1",
+        vision_api_key="sk-vision",
+    ).to_config(())
+    assert cfg.provider_for("screenshot").model == "gpt-4o"
 
 
 def test_per_provider_stall_survives_the_swap() -> None:

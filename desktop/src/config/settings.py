@@ -52,9 +52,11 @@ DEFAULT_SCREENSHOT_PROMPT = (
     "如果截图中包含题目，直接给答案并简要解释。\n"
 )
 
-#: Optional instruction inserted into BOTH system prompts telling the model it may
-#: draw on the user's resume (Summary.md). Toggleable via ``resume.hint_enabled``.
-DEFAULT_RESUME_HINT = "在回答涉及我的经历、项目或能力的问题时，可以参考我的简历 Summary.md 来组织答案。"
+#: Optional instruction inserted into BOTH system prompts telling the model to use
+#: the resume text already injected above it (the ``【resume_context】`` block) --
+#: the model has no filesystem, so naming a file like Summary.md would be useless.
+#: Toggleable via ``resume.hint_enabled``.
+DEFAULT_RESUME_HINT = "在回答涉及我的经历、项目或能力的问题时，请结合上面【resume_context】中的简历内容来组织答案。"
 
 # Keys of shared/protocol events.schema.json#$defs/settings.
 WIRE_SETTINGS_KEYS: tuple[str, ...] = (

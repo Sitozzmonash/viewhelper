@@ -204,8 +204,9 @@ class _RawEnv(BaseSettings):
     #: structural tokens ``model``/``main``/``primary`` (the MODEL_* block, the
     #: default) or ``bk``/``backup``/``fallback`` (the BK_MODEL_* block); any other
     #: value is matched against the backup model name (e.g. ``kimi``), so the user
-    #: can pick a provider by name. Only the conversation LLM swaps -- vision is
-    #: pinned to whichever VISION_* names (DeepSeek cannot see images).
+    #: can pick a provider by name. The swap applies to BOTH conversation and
+    #: screenshot: vision shares the conversation provider chain (the primary
+    #: supports images), unless VISION_* explicitly overrides it.
     llm_primary: str = ""
 
     llm_timeout_sec: float = 180.0
@@ -259,17 +260,6 @@ class _RawEnv(BaseSettings):
             max_tokens=self.llm_max_tokens,
             temperature=self.llm_temperature,
         )
-        vision = ProviderCredentials(
-            # PRD 8.1: vision falls back to the conversation provider.
-            api_key=self._first(self.vision_api_key, llm.api_key),
-            base_url=self._first(self.vision_base_url, llm.base_url),
-            model=self._first(self.vision_model, llm.model),
-            timeout_sec=self.vision_timeout_sec,
-            connect_timeout_sec=self.vision_connect_timeout_sec,
-            stall_timeout_sec=self.vision_stall_timeout_sec,
-            max_tokens=self.vision_max_tokens,
-            temperature=self.vision_temperature,
-        )
         relay = RelayCredentials(
             url=self._first(self.relay_url),
             device_id=self._first(self.relay_device_id) or "my-pc",
@@ -284,6 +274,24 @@ class _RawEnv(BaseSettings):
             connect_timeout_sec=self.bk_llm_connect_timeout_sec,
             stall_timeout_sec=self.bk_llm_stall_timeout_sec,
         )
+        # LLM_PRIMARY lets the user pick which provider is tried first; the other
+        # becomes the automatic fallback. Each block keeps its own stall/timeout
+        # tuning, so swapping the objects is safe.
+        if self._backup_is_primary(llm_fallback.model):
+            llm, llm_fallback = llm_fallback, llm
+        # Vision shares the conversation provider chain (the primary supports
+        # images). Built AFTER the swap so screenshot mode follows the same
+        # primary->fallback order; an explicit VISION_* still overrides.
+        vision = ProviderCredentials(
+            api_key=self._first(self.vision_api_key, llm.api_key),
+            base_url=self._first(self.vision_base_url, llm.base_url),
+            model=self._first(self.vision_model, llm.model),
+            timeout_sec=self.vision_timeout_sec,
+            connect_timeout_sec=self.vision_connect_timeout_sec,
+            stall_timeout_sec=self.vision_stall_timeout_sec,
+            max_tokens=self.vision_max_tokens,
+            temperature=self.vision_temperature,
+        )
         vision_fallback = ProviderCredentials(
             api_key=self._first(self.bk_vision_api_key, llm_fallback.api_key),
             base_url=self._first(self.bk_vision_base_url, llm_fallback.base_url),
@@ -292,11 +300,6 @@ class _RawEnv(BaseSettings):
             connect_timeout_sec=self.bk_vision_connect_timeout_sec,
             stall_timeout_sec=self.bk_vision_stall_timeout_sec,
         )
-        # LLM_PRIMARY lets the user pick which conversation provider is tried
-        # first; the other becomes the automatic fallback. Each block keeps its
-        # own stall/timeout tuning, so swapping the objects is safe.
-        if self._backup_is_primary(llm_fallback.model):
-            llm, llm_fallback = llm_fallback, llm
         return EnvConfig(
             llm=llm,
             vision=vision,

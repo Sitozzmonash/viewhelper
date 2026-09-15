@@ -46,8 +46,10 @@ def compose_system_prompt(
     blocks: list[str] = []
     if resume:
         blocks.append(f"{RESUME_HEADER}\n{resume}")
-    if hint:
-        blocks.append(hint)
+        # The hint tells the model to use the resume block above, so it only
+        # makes sense when that block is actually present.
+        if hint:
+            blocks.append(hint)
     blocks.append(prompt)
     return "\n\n".join(block for block in blocks if block)
 
