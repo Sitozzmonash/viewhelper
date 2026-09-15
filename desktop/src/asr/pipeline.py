@@ -34,6 +34,7 @@ import numpy as np
 from src.asr.finalizer import OfflineFinalizer
 from src.asr.hotwords import HotwordSet
 from src.asr.punctuation import PunctuationRestorer
+from src.asr.shared_models import SharedAsrModels
 from src.asr.streaming import StreamingRecognizer
 from src.asr.vad import EnergyVad, FsmnVad, VadEvent, VadLike
 from src.audio.base import AudioDeviceError, FrameSource
@@ -123,12 +124,14 @@ class AsrPipeline:
         on_final: FinalCallback | None = None,
         sample_rate: int = 16000,
         logger_name: str | None = None,
+        shared_models: SharedAsrModels | None = None,
     ) -> None:
         self.speaker = speaker
         self.source = source
         self._frames = frames
         self._asr_config = config
         self._sample_rate = sample_rate
+        self._shared_models = shared_models
         self._hotwords = hotwords if hotwords is not None else HotwordSet(config.hotwords)
         self._on_partial = on_partial
         self._on_final = on_final
@@ -279,6 +282,7 @@ class AsrPipeline:
             device=models.device,
             disable_update=models.disable_update,
             max_end_silence_ms=models.max_end_silence_ms,
+            shared=self._shared_models,
         )
         backend = "fsmn-vad"
         if not vad.load():
@@ -299,6 +303,7 @@ class AsrPipeline:
             device=models.device,
             disable_update=models.disable_update,
             sample_rate=self._sample_rate,
+            shared=self._shared_models,
         )
         streaming.load()
         finalizer = OfflineFinalizer(
@@ -306,10 +311,14 @@ class AsrPipeline:
             device=models.device,
             disable_update=models.disable_update,
             sample_rate=self._sample_rate,
+            shared=self._shared_models,
         )
         finalizer.load()
         punctuation = PunctuationRestorer(
-            models.punctuation, device=models.device, disable_update=models.disable_update
+            models.punctuation,
+            device=models.device,
+            disable_update=models.disable_update,
+            shared=self._shared_models,
         )
         punctuation.load()
 

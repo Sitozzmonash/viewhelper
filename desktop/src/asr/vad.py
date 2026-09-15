@@ -14,6 +14,7 @@ from typing import Any, Literal, Protocol
 import numpy as np
 
 from src.asr.base import FunasrComponent
+from src.asr.shared_models import SharedAsrModels
 from src.audio.resample import rms_int16
 from src.util.log import get_logger
 
@@ -63,12 +64,14 @@ class FsmnVad(FunasrComponent):
         disable_update: bool = True,
         sample_rate: int = 16000,
         max_end_silence_ms: int = 800,
+        shared: SharedAsrModels | None = None,
     ) -> None:
         super().__init__(
             model,
             device=device,
             disable_update=disable_update,
             sample_rate=sample_rate,
+            shared=shared,
         )
         self._max_end_silence_ms = max(100, int(max_end_silence_ms))
         self._cache: dict[str, Any] = {}

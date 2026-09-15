@@ -20,6 +20,7 @@ from typing import Any
 
 from src.asr.hotwords import HotwordSet
 from src.asr.pipeline import AsrPipeline, FinalTranscript
+from src.asr.shared_models import SharedAsrModels
 from src.audio.base import FrameSource
 from src.config.settings import AppConfig, ConfigStore
 from src.services.base import ServiceBase
@@ -42,6 +43,8 @@ class TranscriptionService(ServiceBase):
         self._db = db
         self._config = config
         self._pipelines: dict[str, AsrPipeline] = {}
+        # One AutoModel set for every pipeline: half the host RAM and VRAM.
+        self._shared_models = SharedAsrModels()
         self._final_lock = asyncio.Lock()
         self._partials = 0
         self._finals = 0
@@ -68,6 +71,7 @@ class TranscriptionService(ServiceBase):
             ),
             on_final=self.on_final,
             sample_rate=cfg.audio.sample_rate,
+            shared_models=self._shared_models,
         )
         self._pipelines[source] = pipeline
         return pipeline

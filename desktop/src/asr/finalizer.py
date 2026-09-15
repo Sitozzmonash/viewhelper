@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 
 from src.asr.base import FunasrComponent, extract_text
+from src.asr.shared_models import SharedAsrModels
 from src.util.log import get_logger
 
 __all__ = ["OfflineFinalizer"]
@@ -31,12 +32,14 @@ class OfflineFinalizer(FunasrComponent):
         disable_update: bool = True,
         sample_rate: int = 16000,
         batch_size_s: int = 300,
+        shared: SharedAsrModels | None = None,
     ) -> None:
         super().__init__(
             model,
             device=device,
             disable_update=disable_update,
             sample_rate=sample_rate,
+            shared=shared,
         )
         self._batch_size_s = batch_size_s
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -14,6 +16,7 @@ from src.asr import pipeline as pipeline_module
 from src.asr.base import FunasrComponent, extract_text, funasr_importable
 from src.asr.hotwords import MAX_HOTWORDS, HotwordSet, merge_hotwords, parse_hotwords
 from src.asr.pipeline import AsrPipeline, FinalTranscript
+from src.asr.shared_models import SharedAsrModels
 from src.asr.vad import EnergyVad, VadEvent
 from src.config.settings import AsrConfig, EnergyVadConfig
 
@@ -212,6 +215,103 @@ def test_funasr_component_swallows_inference_errors(
     assert component.load() is True  # idempotent
     assert component.available is True
     assert component._generate(input=np.zeros(4, dtype=np.float32)) is None
+
+
+# -------------------------------------------------------------- shared models
+
+
+def test_shared_registry_builds_once_and_keys_on_config() -> None:
+    builds: list[str] = []
+
+    def build_factory(tag: str) -> Any:
+        def build() -> Any:
+            builds.append(tag)
+            return object()
+
+        return build
+
+    registry = SharedAsrModels()
+    first = registry.acquire(
+        name="m", device="cuda:0", disable_update=True, extra=None, build=build_factory("a")
+    )
+    again = registry.acquire(
+        name="m", device="cuda:0", disable_update=True, extra=None, build=build_factory("b")
+    )
+    other_device = registry.acquire(
+        name="m", device="cpu", disable_update=True, extra=None, build=build_factory("c")
+    )
+
+    assert first is again
+    assert first.model is again.model
+    assert other_device is not first
+    assert builds == ["a", "c"]
+
+
+def test_shared_registry_remembers_a_failed_build() -> None:
+    calls = 0
+
+    def build() -> None:
+        nonlocal calls
+        calls += 1
+        return None
+
+    registry = SharedAsrModels()
+    for _ in range(3):
+        entry = registry.acquire(
+            name="missing", device="cpu", disable_update=True, extra=None, build=build
+        )
+        assert entry.model is None
+    assert calls == 1
+
+
+def test_shared_components_reuse_one_model_and_serialise_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two pipelines on one registry share the model; generate() never overlaps."""
+
+    class TrackingModel:
+        def __init__(self) -> None:
+            self._state = threading.Lock()
+            self.active = 0
+            self.max_active = 0
+
+        def generate(self, **_kwargs: Any) -> Any:
+            with self._state:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            time.sleep(0.02)
+            with self._state:
+                self.active -= 1
+            return [{"text": "ok"}]
+
+    built: list[Any] = []
+
+    def fake_load(*_args: Any, **_kwargs: Any) -> Any:
+        model = TrackingModel()
+        built.append(model)
+        return model
+
+    monkeypatch.setattr(base_module, "load_auto_model", fake_load)
+    registry = SharedAsrModels()
+    first = FunasrComponent("paraformer-zh", shared=registry)
+    second = FunasrComponent("paraformer-zh", shared=registry)
+
+    assert first.load() is True
+    assert second.load() is True
+    assert len(built) == 1
+    assert first._model is second._model
+
+    def worker(component: FunasrComponent) -> None:
+        for _ in range(5):
+            assert component._generate(input=np.zeros(4, dtype=np.float32)) == [{"text": "ok"}]
+
+    threads = [threading.Thread(target=worker, args=(item,)) for item in (first, second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert built[0].max_active == 1
 
 
 # -------------------------------------------------------------------- hotwords

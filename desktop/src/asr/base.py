@@ -9,8 +9,10 @@ process (PRD 27).
 from __future__ import annotations
 
 import importlib.util
+import threading
 from typing import Any
 
+from src.asr.shared_models import SharedAsrModels
 from src.util.log import get_logger
 
 __all__ = [
@@ -86,13 +88,16 @@ class FunasrComponent:
         disable_update: bool = True,
         sample_rate: int = 16000,
         extra: dict[str, Any] | None = None,
+        shared: SharedAsrModels | None = None,
     ) -> None:
         self._model_name = model
         self._device = device
         self._disable_update = disable_update
         self._sample_rate = sample_rate
         self._extra = dict(extra or {})
+        self._shared = shared
         self._model: Any | None = None
+        self._infer_lock: threading.Lock | None = None
 
     @property
     def name(self) -> str:
@@ -110,29 +115,55 @@ class FunasrComponent:
         return self._model_name
 
     def load(self) -> bool:
-        """Load the model (idempotent). Returns availability."""
+        """Load the model (idempotent). Returns availability.
+
+        With a :class:`SharedAsrModels` registry the first component to load a
+        given model builds it; every later component reuses that instance (and
+        its inference lock).
+        """
         if self._model is not None:
             return True
-        self._model = load_auto_model(
+        if self._shared is not None:
+            entry = self._shared.acquire(
+                name=self._model_name,
+                device=self._device,
+                disable_update=self._disable_update,
+                extra=self._extra,
+                build=self._build_model,
+            )
+            self._model, self._infer_lock = entry.model, entry.lock
+        else:
+            self._model = self._build_model()
+        if self._model is not None:
+            _logger.info("loaded %s", self.name)
+        return self._model is not None
+
+    def _build_model(self) -> Any | None:
+        """Build the underlying ``AutoModel`` (registry factory / direct load)."""
+        return load_auto_model(
             self._model_name,
             device=self._device,
             disable_update=self._disable_update,
             extra=self._extra,
         )
-        if self._model is not None:
-            _logger.info("loaded %s", self.name)
-        return self._model is not None
 
     def unload(self) -> None:
         """Release the model (frees torch memory on shutdown)."""
         self._model = None
+        self._infer_lock = None
 
     def _generate(self, **kwargs: Any) -> Any | None:
         """Guarded ``model.generate`` call: errors are logged, never raised."""
-        if self._model is None:
+        model = self._model
+        if model is None:
             return None
         try:
-            return self._model.generate(**kwargs)
+            lock = self._infer_lock
+            if lock is None:
+                return model.generate(**kwargs)
+            # funasr mutates its own kwargs in place; shared models serialise.
+            with lock:
+                return model.generate(**kwargs)
         except Exception as exc:  # noqa: BLE001 - one bad chunk must not kill ASR
             _logger.warning("%s inference failed: %s: %s", self.name, type(exc).__name__, exc)
             return None

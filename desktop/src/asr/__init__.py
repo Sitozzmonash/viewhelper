@@ -7,6 +7,7 @@ from src.asr.finalizer import OfflineFinalizer
 from src.asr.hotwords import HotwordSet, parse_hotwords
 from src.asr.pipeline import AsrPipeline, FinalCallback, FinalTranscript, PartialCallback, PipelineSettings
 from src.asr.punctuation import PunctuationRestorer
+from src.asr.shared_models import SharedAsrModels
 from src.asr.streaming import StreamingRecognizer
 from src.asr.vad import EnergyVad, FsmnVad, VadEvent
 
@@ -27,4 +28,5 @@ __all__ = [
     "FunasrComponent",
     "funasr_importable",
     "load_auto_model",
+    "SharedAsrModels",
 ]

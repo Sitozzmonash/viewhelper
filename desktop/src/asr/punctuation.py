@@ -7,6 +7,7 @@ text stays stable and cheap.
 from __future__ import annotations
 
 from src.asr.base import FunasrComponent, extract_text
+from src.asr.shared_models import SharedAsrModels
 from src.util.log import get_logger
 
 __all__ = ["PunctuationRestorer"]
@@ -25,8 +26,9 @@ class PunctuationRestorer(FunasrComponent):
         *,
         device: str = "cpu",
         disable_update: bool = True,
+        shared: SharedAsrModels | None = None,
     ) -> None:
-        super().__init__(model, device=device, disable_update=disable_update)
+        super().__init__(model, device=device, disable_update=disable_update, shared=shared)
 
     def restore(self, text: str) -> str:
         """Return *text* with punctuation; falls back to the input on failure."""

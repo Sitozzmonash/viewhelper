@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from src.asr.base import FunasrComponent, extract_text
+from src.asr.shared_models import SharedAsrModels
 from src.util.log import get_logger
 
 __all__ = ["StreamingRecognizer"]
@@ -36,12 +37,14 @@ class StreamingRecognizer(FunasrComponent):
         disable_update: bool = True,
         sample_rate: int = 16000,
         chunk_ms: int = 600,
+        shared: SharedAsrModels | None = None,
     ) -> None:
         super().__init__(
             model,
             device=device,
             disable_update=disable_update,
             sample_rate=sample_rate,
+            shared=shared,
         )
         center_units = max(1, int(round(chunk_ms / _UNIT_MS)))
         # FunASR paraformer-online expects [left, center, right] in 60ms units.
