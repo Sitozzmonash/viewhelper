@@ -52,6 +52,10 @@ interface RealtimeContextValue {
   status: ConnectionStatus
   /** PC presence, driven by `presence` and `auth_ok.pc_online`. */
   pcOnline: boolean
+  /** Whether room+token are filled in; null until known (localStorage is client-only). */
+  paired: boolean | null
+  /** Relay `auth_failed` message while paired (wrong room/token), else null. */
+  authError: string | null
   demo: boolean
   pairing: PairingConfig
   setPairing: (config: PairingConfig) => void
@@ -64,6 +68,11 @@ const RealtimeContext = createContext<RealtimeContextValue | null>(null)
 export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [pcOnline, setPcOnline] = useState(false)
+  const [authError, setAuthError] = useState<string | null>(null)
+  // Deliberately null on first render: the server prerender cannot read
+  // localStorage, so resolving pairing only after mount avoids a hydration
+  // mismatch on the header's "未配对" state.
+  const [paired, setPaired] = useState<boolean | null>(DEMO ? true : null)
   const [pairing, setPairingState] = useState<PairingConfig>(() => loadPairing())
   const listenersRef = useRef(new Set<RealtimeListener>())
   const transportRef = useRef<RealtimeTransport | null>(null)
@@ -82,9 +91,14 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   const setPairing = useCallback((config: PairingConfig) => {
     const next = { room: config.room.trim(), token: config.token.trim() }
     savePairing(next)
+    setAuthError(null)
     // Updating state re-runs the transport effect (deps below) -> reconnect.
     setPairingState(next)
   }, [])
+
+  useEffect(() => {
+    setPaired(DEMO || Boolean(pairing.room && pairing.token))
+  }, [pairing.room, pairing.token])
 
   useEffect(() => {
     const transport: RealtimeTransport = DEMO
@@ -95,6 +109,9 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
     const unsubscribe = transport.subscribe((event: RealtimeEvent) => {
       if (event.type === 'status') setStatus(event.status)
       else if (event.type === 'presence' || event.type === 'auth_ok') setPcOnline(event.pcOnline)
+      if (event.type === 'auth_ok') setAuthError(null)
+      else if (event.type === 'error' && event.code === 'auth_failed')
+        setAuthError(event.message || '配对失败')
       listenersRef.current.forEach((listener) => listener(event))
     })
 
@@ -108,8 +125,18 @@ export function RealtimeProvider({ children }: { children: React.ReactNode }) {
   }, [pairing.room, pairing.token])
 
   const value = useMemo<RealtimeContextValue>(
-    () => ({ status, pcOnline, demo: DEMO, pairing, setPairing, subscribe, send }),
-    [status, pcOnline, pairing, setPairing, subscribe, send],
+    () => ({
+      status,
+      pcOnline,
+      paired,
+      authError,
+      demo: DEMO,
+      pairing,
+      setPairing,
+      subscribe,
+      send,
+    }),
+    [status, pcOnline, paired, authError, pairing, setPairing, subscribe, send],
   )
 
   return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>

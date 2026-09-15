@@ -20,10 +20,6 @@ export function ConversationView() {
   const tokenRate = useTokenRate()
   const scrollRef = useRef<HTMLDivElement>(null)
   const [expanded, setExpanded] = useState(false)
-  // Only auto-scroll while the user is already at (or near) the bottom. If they
-  // scrolled up to read the transcript, incoming ASR messages must not yank the
-  // page down.
-  const pinnedRef = useRef(true)
 
   const online = pcOnline && status === 'connected'
 
@@ -54,7 +50,6 @@ export function ConversationView() {
     (message: ChatMessage) => {
       if (isStreaming) return // single active request
       if (!message.isFinal || !message.messageId) return
-      pinnedRef.current = true
       start('conversation', message.messageId)
     },
     [isStreaming, start],
@@ -62,25 +57,20 @@ export function ConversationView() {
 
   const lastText = messages.length ? messages[messages.length - 1].text : ''
 
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current
-    if (!el) return
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    pinnedRef.current = distanceFromBottom < 80
-  }, [])
-
+  // Always pin the transcript to the newest content: every messages update —
+  // including rapid streaming text updates — must land at the bottom on its own.
+  // Instant ('auto') scrolling keeps streaming updates from stuttering.
   useEffect(() => {
-    if (!pinnedRef.current) return
     const el = scrollRef.current
     if (!el) return
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
   }, [messages.length, lastText])
 
   const hasAnyAnswer = Boolean(latestAnswer)
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {messages.length === 0 ? (
           <div className="flex h-full min-h-56 flex-col items-center justify-center px-8 text-center text-muted-foreground">
             <span className="flex size-12 items-center justify-center rounded-2xl bg-secondary">

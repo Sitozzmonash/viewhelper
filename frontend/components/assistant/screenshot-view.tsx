@@ -1,6 +1,6 @@
 'use client'
 
-import { Camera, RefreshCw, Trash2 } from 'lucide-react'
+import { Camera, Maximize2, RefreshCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStreamingAnswer, type AnswerState } from '@/hooks/use-streaming-answer'
 import { useTokenRate } from '@/hooks/use-token-rate'
@@ -11,6 +11,7 @@ import type { Screenshot } from '@/lib/realtime/types'
 import { cn } from '@/lib/utils'
 import { AiAnswerCard } from './ai-answer-card'
 import { AnswerOverlay } from './answer-overlay'
+import { ImageOverlay } from './image-overlay'
 import { StatusBar } from './status-bar'
 
 export function ScreenshotView() {
@@ -22,6 +23,7 @@ export function ScreenshotView() {
   const [activeShotRequestId, setActiveShotRequestId] = useState<string | null>(null)
   const [historyAnswers, setHistoryAnswers] = useState<Record<string, AnswerState>>({})
   const [expanded, setExpanded] = useState(false)
+  const [imageExpanded, setImageExpanded] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const online = pcOnline && status === 'connected'
@@ -155,6 +157,7 @@ export function ScreenshotView() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
     setExpanded(false)
+    setImageExpanded(false)
   }, [selected?.id])
 
   return (
@@ -164,12 +167,23 @@ export function ScreenshotView() {
           <>
             <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
               {selected.preview ? (
-                /* eslint-disable-next-line @next/next/no-img-element */
-                <img
-                  src={selected.preview}
-                  alt="PC 截图预览"
-                  className="h-auto max-h-[22vh] w-full object-cover object-top"
-                />
+                <button
+                  type="button"
+                  onClick={() => setImageExpanded(true)}
+                  aria-label="放大截图预览"
+                  className="relative block w-full active:opacity-90"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={selected.preview}
+                    alt="PC 截图预览"
+                    className="h-16 w-full object-cover object-top"
+                  />
+                  <span className="absolute right-2 bottom-2 flex items-center gap-1 rounded-full bg-black/55 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur-[2px]">
+                    <Maximize2 className="size-3" />
+                    点击放大
+                  </span>
+                </button>
               ) : (
                 <div className="flex aspect-[16/10] w-full items-center justify-center bg-secondary text-xs text-muted-foreground">
                   预览不可用（仅最新截图带预览）
@@ -289,6 +303,14 @@ export function ScreenshotView() {
 
       {expanded && answer ? (
         <AnswerOverlay answer={answer} onClose={() => setExpanded(false)} onStop={stop} />
+      ) : null}
+
+      {imageExpanded && selected?.preview ? (
+        <ImageOverlay
+          src={selected.preview}
+          alt="PC 截图预览"
+          onClose={() => setImageExpanded(false)}
+        />
       ) : null}
     </div>
   )
