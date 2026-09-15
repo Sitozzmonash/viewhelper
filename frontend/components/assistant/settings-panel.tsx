@@ -17,18 +17,12 @@ import { cn } from '@/lib/utils'
  */
 
 interface SettingsForm {
-  conversation_prompt: string
-  screenshot_prompt: string
   context_messages: number
   hotwords: string
   show_partial: boolean
 }
 
 const DEFAULT_FORM: SettingsForm = {
-  conversation_prompt:
-    '你是一个实时对话助手。根据当前对话和上下文，直接给出用户现在最适合说出的回答。回答简洁、自然，不要解释过程。',
-  screenshot_prompt:
-    '你是一个截图分析助手。分析截图内容并直接回答最重要的问题。如果截图中包含题目，直接给答案并简要解释。',
   context_messages: 10,
   hotwords: '',
   show_partial: true,
@@ -53,8 +47,6 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
         if (event.type !== 'settings_updated') return
         const s: SettingsPayload = event.settings
         setForm((prev) => ({
-          conversation_prompt: s.conversation_prompt ?? prev.conversation_prompt,
-          screenshot_prompt: s.screenshot_prompt ?? prev.screenshot_prompt,
           context_messages: s.context_messages ?? prev.context_messages,
           hotwords: s.hotwords ?? prev.hotwords,
           show_partial: s.show_partial ?? prev.show_partial,
@@ -104,7 +96,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
         <div className="flex items-center justify-between border-b border-border px-5 py-4">
           <div>
             <h2 className="text-lg font-semibold">设置</h2>
-            <p className="mt-0.5 text-xs text-muted-foreground">Prompt 与配对信息会同步到 PC 端使用</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">上下文、热词与配对会同步到 PC 端；Prompt 在 PC 端配置</p>
           </div>
           <button
             type="button"
@@ -171,27 +163,6 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
           </div>
 
           <div className="h-px bg-border" />
-
-          {/* ---------------------------------------------------- prompts */}
-          <label className="block">
-            <span className="text-sm font-semibold">对话回答 Prompt</span>
-            <textarea
-              value={form.conversation_prompt}
-              onChange={(e) => update('conversation_prompt', e.target.value)}
-              rows={4}
-              className="mt-2 w-full resize-none rounded-2xl border border-border bg-secondary/45 px-3.5 py-3 text-sm leading-relaxed outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/10"
-            />
-          </label>
-
-          <label className="block">
-            <span className="text-sm font-semibold">截图回答 Prompt</span>
-            <textarea
-              value={form.screenshot_prompt}
-              onChange={(e) => update('screenshot_prompt', e.target.value)}
-              rows={4}
-              className="mt-2 w-full resize-none rounded-2xl border border-border bg-secondary/45 px-3.5 py-3 text-sm leading-relaxed outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/10"
-            />
-          </label>
 
           <label className="flex items-center justify-between rounded-2xl border border-border px-4 py-3.5">
             <div>
