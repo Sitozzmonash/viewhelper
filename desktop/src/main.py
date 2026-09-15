@@ -232,6 +232,7 @@ class DesktopApplication:
         self._settings: SettingsService | None = None
         self._dispatcher: LlmDispatcher | None = None
         self._hotkey: ScreenshotHotkey | None = None
+        self._conversation_hotkey: ScreenshotHotkey | None = None
         self._sentinel: StopFileSentinel | None = None
         self._supervisors: list[Supervisor] = []
         self._unsubscribe_config: Callable[[], None] | None = None
@@ -330,6 +331,15 @@ class DesktopApplication:
             debounce_sec=config.config.screenshot.debounce_sec,
             on_trigger=screenshot.trigger_from_hotkey,
         )
+        # Second global hotkey: answer the latest conversation turn (Shift+Ctrl+Enter),
+        # the keyboard equivalent of tapping a bubble's ask dot on the phone.
+        conversation_hotkey: ScreenshotHotkey | None = None
+        if config.config.conversation.hotkey_enabled:
+            conversation_hotkey = ScreenshotHotkey(
+                hotkey=config.config.conversation.hotkey,
+                debounce_sec=config.config.conversation.hotkey_debounce_sec,
+                on_trigger=conversation.trigger_from_hotkey,
+            )
         # Stop-file sentinel (<base_dir>/runtime/app.stop): management scripts
         # create the file to ask for the same graceful shutdown as SIGTERM.
         # A stale file from a previous run is removed before we start watching.
@@ -345,6 +355,7 @@ class DesktopApplication:
         self._transcription, self._conversation = transcription, conversation
         self._screenshot, self._history, self._settings = screenshot, history, settings
         self._dispatcher, self._hotkey = dispatcher, hotkey
+        self._conversation_hotkey = conversation_hotkey
         self._sentinel = sentinel
         self._unsubscribe_config = transcription.subscribe_config()
         self._started = True
@@ -382,6 +393,15 @@ class DesktopApplication:
         _logger.info(
             "hotkey: %s (debounce %.1fs)", cfg.screenshot.hotkey, cfg.screenshot.debounce_sec
         )
+        if cfg.conversation.hotkey_enabled:
+            _logger.info(
+                "conversation hotkey: %s (debounce %.1fs, context %d)",
+                cfg.conversation.hotkey,
+                cfg.conversation.hotkey_debounce_sec,
+                cfg.conversation.hotkey_context_messages,
+            )
+        else:
+            _logger.info("conversation hotkey: disabled")
         for module, purpose in _OPTIONAL_DEPENDENCIES.items():
             if not dependency_available(module):
                 _logger.warning("optional dependency missing: %-14s -> %s", module, purpose)
@@ -408,6 +428,8 @@ class DesktopApplication:
             tasks.add(self._supervise("asr-loopback", self._run_loopback))
 
         tasks.add(self._supervise("hotkey", self._run_hotkey))
+        if self._conversation_hotkey is not None:
+            tasks.add(self._supervise("conversation-hotkey", self._run_conversation_hotkey))
         tasks.add(self._supervise("status", self._run_status_logger))
         # The sentinel watcher never restarts: it either triggers the shutdown
         # or ends when the stop event was set by another source.
@@ -468,6 +490,9 @@ class DesktopApplication:
 
     async def _run_hotkey(self) -> None:
         await _require(self._hotkey, "hotkey").run(self._stop_event)
+
+    async def _run_conversation_hotkey(self) -> None:
+        await _require(self._conversation_hotkey, "conversation hotkey").run(self._stop_event)
 
     async def _run_status_logger(self) -> None:
         """Periodic one-line health summary (this is a background process)."""
@@ -548,6 +573,10 @@ class DesktopApplication:
         if hotkey is not None:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(asyncio.to_thread(hotkey.stop), timeout=2.0)
+        conversation_hotkey = self._conversation_hotkey
+        if conversation_hotkey is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(asyncio.to_thread(conversation_hotkey.stop), timeout=2.0)
 
         # 2. ASR pipelines: signal their worker threads to finish, then let
         #    in-flight finals complete. The workers exit within one block-read

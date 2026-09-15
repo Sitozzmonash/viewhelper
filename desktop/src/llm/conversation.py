@@ -36,13 +36,20 @@ TARGET_INSTRUCTION = f"请针对{TARGET_HEADER}给出回答。"
 RESUME_HEADER = "【resume_context】"
 
 
-def compose_system_prompt(system_prompt: str, resume_context: str = "") -> str:
-    """System message content: resume_context block first, then the prompt."""
+def compose_system_prompt(
+    system_prompt: str, resume_context: str = "", resume_hint: str = ""
+) -> str:
+    """System message: resume_context block, then the resume hint, then the prompt."""
     prompt = system_prompt.strip()
     resume = (resume_context or "").strip()
-    if not resume:
-        return prompt
-    return f"{RESUME_HEADER}\n{resume}\n\n{prompt}"
+    hint = (resume_hint or "").strip()
+    blocks: list[str] = []
+    if resume:
+        blocks.append(f"{RESUME_HEADER}\n{resume}")
+    if hint:
+        blocks.append(hint)
+    blocks.append(prompt)
+    return "\n\n".join(block for block in blocks if block)
 
 
 class TargetNotFound(LookupError):
@@ -125,10 +132,14 @@ def build_conversation_messages(
     context: Sequence[ConversationTurn],
     target: ConversationTurn,
     resume_context: str = "",
+    resume_hint: str = "",
 ) -> list[ChatMessage]:
     """Assemble the chat messages for a conversation LLM request."""
     messages: list[ChatMessage] = [
-        {"role": "system", "content": compose_system_prompt(system_prompt, resume_context)}
+        {
+            "role": "system",
+            "content": compose_system_prompt(system_prompt, resume_context, resume_hint),
+        }
     ]
     context_block = render_context(context)
     if context_block:
@@ -153,6 +164,7 @@ def build_from_records(
     target_id: str,
     limit: int,
     resume_context: str = "",
+    resume_hint: str = "",
 ) -> tuple[list[ChatMessage], ConversationTurn, list[ConversationTurn]]:
     """Convenience wrapper over storage records.
 
@@ -161,7 +173,11 @@ def build_from_records(
     turns = [ConversationTurn.from_record(record) for record in history]
     context, target = select_context(turns, target_id, limit)
     messages = build_conversation_messages(
-        system_prompt=system_prompt, context=context, target=target, resume_context=resume_context
+        system_prompt=system_prompt,
+        context=context,
+        target=target,
+        resume_context=resume_context,
+        resume_hint=resume_hint,
     )
     return messages, target, context
 

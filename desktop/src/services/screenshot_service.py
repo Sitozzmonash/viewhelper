@@ -216,6 +216,7 @@ class ScreenshotService(ServiceBase):
                 system_prompt=cfg.prompts.screenshot,
                 image_data_url=image_data_url,
                 resume_context=cfg.resume_context,
+                resume_hint=cfg.resume_hint,
                 context=context,
             )
         except VisionPayloadError as exc:

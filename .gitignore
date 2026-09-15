@@ -35,3 +35,13 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+
+.vercel
+.env*
+
+# runtime pid files
+*.pid
+
+# personal resume — NEVER commit
+docs/简历Summary.md
+docs/简历*.md

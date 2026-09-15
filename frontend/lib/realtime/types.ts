@@ -114,7 +114,7 @@ export type RealtimeEvent =
       duration_sec: number | null
     }
   | { type: 'history_sync_response'; payload: HistorySyncPayload }
-  | { type: 'llm_started'; request_id: string; mode: LlmMode }
+  | { type: 'llm_started'; request_id: string; mode: LlmMode; target_id?: string | null }
   | { type: 'llm_chunk'; request_id: string; delta: string }
   | {
       type: 'llm_stats'

@@ -10,6 +10,7 @@ import { clearScreenshotsCache, loadScreenshots, saveScreenshots } from '@/lib/r
 import type { Screenshot } from '@/lib/realtime/types'
 import { cn } from '@/lib/utils'
 import { AiAnswerCard } from './ai-answer-card'
+import { AnswerOverlay } from './answer-overlay'
 import { StatusBar } from './status-bar'
 
 export function ScreenshotView() {
@@ -20,6 +21,7 @@ export function ScreenshotView() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [activeShotRequestId, setActiveShotRequestId] = useState<string | null>(null)
   const [historyAnswers, setHistoryAnswers] = useState<Record<string, AnswerState>>({})
+  const [expanded, setExpanded] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const online = pcOnline && status === 'connected'
@@ -152,10 +154,11 @@ export function ScreenshotView() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+    setExpanded(false)
   }, [selected?.id])
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {selected ? (
           <>
@@ -207,6 +210,7 @@ export function ScreenshotView() {
                 stopped={answer.status === 'stopped'}
                 error={answer.status === 'error' ? (answer.errorMessage ?? '生成失败') : undefined}
                 onStop={stop}
+                onToggleExpand={() => setExpanded(true)}
               />
             ) : (
               <div className="rounded-2xl border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
@@ -282,6 +286,10 @@ export function ScreenshotView() {
         }
         tokenRate={answer ? tokenRate : null}
       />
+
+      {expanded && answer ? (
+        <AnswerOverlay answer={answer} onClose={() => setExpanded(false)} onStop={stop} />
+      ) : null}
     </div>
   )
 }

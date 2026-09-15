@@ -13,6 +13,7 @@ Responsibilities
 from __future__ import annotations
 
 import asyncio
+import uuid
 from typing import Any
 
 from src.config.env import EnvConfig
@@ -24,12 +25,13 @@ from src.storage.sqlite import Database
 from src.transport.protocol import Envelope, EventType
 from src.util.log import get_logger, redact
 
-__all__ = ["ConversationService", "MISSING_MESSAGE_ID", "MESSAGE_NOT_FOUND"]
+__all__ = ["ConversationService", "MISSING_MESSAGE_ID", "MESSAGE_NOT_FOUND", "NO_MESSAGE_YET"]
 
 _logger = get_logger("services.conversation")
 
 MISSING_MESSAGE_ID = "message_id is required for conversation mode"
 MESSAGE_NOT_FOUND = "message not found on the PC"
+NO_MESSAGE_YET = "no conversation yet"
 
 
 class ConversationService(ServiceBase):
@@ -69,16 +71,23 @@ class ConversationService(ServiceBase):
         await self._runner.cancel(request_id)
 
     # -- request building ----------------------------------------------
-    async def start_conversation_request(self, request_id: str, message_id: str | None) -> bool:
-        """Answer *message_id*; returns whether the job was accepted."""
+    async def start_conversation_request(
+        self, request_id: str, message_id: str | None, *, context_messages: int | None = None
+    ) -> bool:
+        """Answer *message_id*; returns whether the job was accepted.
+
+        *context_messages* overrides ``conversation.context_messages`` (the hotkey
+        path uses ``conversation.hotkey_context_messages``).
+        """
         if not message_id:
             await self._fail(request_id, MISSING_MESSAGE_ID)
             return False
 
         cfg = self._config.config
+        limit = cfg.conversation.context_messages if context_messages is None else context_messages
         try:
             context_records, target_record = await asyncio.to_thread(
-                self._db.context_window, message_id, cfg.conversation.context_messages
+                self._db.context_window, message_id, limit
             )
         except Exception as exc:  # noqa: BLE001 - a broken DB must not kill the handler
             _logger.exception("cannot load context for %s", request_id)
@@ -96,6 +105,7 @@ class ConversationService(ServiceBase):
             context=context,
             target=target,
             resume_context=cfg.resume_context,
+            resume_hint=cfg.resume_hint,
         )
         _logger.info("conversation request %s: %s", request_id, describe_request(target, context))
 
@@ -111,6 +121,44 @@ class ConversationService(ServiceBase):
         if not result.accepted:
             await self._fail(request_id, result.reason or "request rejected")
         return result.accepted
+
+    # -- hotkey ---------------------------------------------------------
+    def trigger_from_hotkey(self) -> bool:
+        """Called from the pynput thread; answers the latest message on the loop.
+
+        Mirrors :meth:`ScreenshotService.trigger_from_hotkey`: marshals onto the
+        asyncio loop and never raises into the hook thread.
+        """
+        return self.spawn_threadsafe(self.answer_latest, name="conversation-hotkey")
+
+    async def answer_latest(self) -> bool:
+        """Answer the newest final transcript turn (same as tapping the ask dot).
+
+        Uses ``conversation.hotkey_context_messages`` preceding turns as context,
+        counting upward from the latest message regardless of speaker.
+        """
+        cfg = self._config.config
+        try:
+            recent = await asyncio.to_thread(self._db.recent_messages, 1, final_only=True)
+        except Exception as exc:  # noqa: BLE001 - a broken DB must not kill the hotkey
+            _logger.exception("cannot load latest message for hotkey")
+            await self.emit_error(redact(f"cannot load conversation: {exc}"))
+            return False
+        if not recent:
+            _logger.info("conversation hotkey ignored: %s", NO_MESSAGE_YET)
+            return False
+        request_id = f"req-hotkey-{uuid.uuid4().hex[:12]}"
+        _logger.info(
+            "conversation hotkey -> request %s (target=%s, context=%d)",
+            request_id,
+            recent[-1].id,
+            cfg.conversation.hotkey_context_messages,
+        )
+        return await self.start_conversation_request(
+            request_id,
+            recent[-1].id,
+            context_messages=cfg.conversation.hotkey_context_messages,
+        )
 
     # -- helpers --------------------------------------------------------
     async def _fail(self, request_id: str, message: str) -> None:

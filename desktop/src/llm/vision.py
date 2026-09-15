@@ -43,6 +43,7 @@ def build_vision_messages(
     instruction: str | None = None,
     detail: str | None = None,
     resume_context: str = "",
+    resume_hint: str = "",
     context: Sequence[ConversationTurn] = (),
 ) -> list[ChatMessage]:
     """Assemble the chat messages for a screenshot LLM request.
@@ -59,7 +60,10 @@ def build_vision_messages(
         image_url["detail"] = detail
 
     messages: list[ChatMessage] = [
-        {"role": "system", "content": compose_system_prompt(system_prompt, resume_context)}
+        {
+            "role": "system",
+            "content": compose_system_prompt(system_prompt, resume_context, resume_hint),
+        }
     ]
     context_block = render_context(context)
     if context_block:

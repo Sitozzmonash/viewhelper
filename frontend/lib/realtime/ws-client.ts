@@ -211,6 +211,7 @@ export class WsClient implements RealtimeTransport {
           type: 'llm_started',
           request_id: str(p.request_id),
           mode: p.mode === 'screenshot' ? 'screenshot' : 'conversation',
+          target_id: typeof p.target_id === 'string' ? p.target_id : null,
         })
         break
 

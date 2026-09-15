@@ -45,6 +45,11 @@ _LEGACY_ALIASES: dict[str, tuple[str, ...]] = {
     "VISION_MODEL": ("MODEL_NAME",),
 }
 
+#: ``LLM_PRIMARY`` tokens that keep the MODEL_* block first (the default).
+_PRIMARY_MAIN_TOKENS = frozenset({"", "model", "main", "primary", "deepseek", "1"})
+#: ``LLM_PRIMARY`` tokens that promote the BK_MODEL_* block to first.
+_PRIMARY_BACKUP_TOKENS = frozenset({"bk", "backup", "fallback", "secondary", "kimi", "2"})
+
 
 def prime_environment(base_dir: Path | None = None) -> list[Path]:
     """Load ``.env`` files into ``os.environ`` without overriding existing values.
@@ -195,6 +200,14 @@ class _RawEnv(BaseSettings):
     relay_secret: str = ""
     log_level: str = "INFO"
 
+    #: Which provider block is tried FIRST for conversation answers. Accepts the
+    #: structural tokens ``model``/``main``/``primary`` (the MODEL_* block, the
+    #: default) or ``bk``/``backup``/``fallback`` (the BK_MODEL_* block); any other
+    #: value is matched against the backup model name (e.g. ``kimi``), so the user
+    #: can pick a provider by name. Only the conversation LLM swaps -- vision is
+    #: pinned to whichever VISION_* names (DeepSeek cannot see images).
+    llm_primary: str = ""
+
     llm_timeout_sec: float = 180.0
     llm_connect_timeout_sec: float = 15.0
     llm_stall_timeout_sec: float = 30.0
@@ -218,6 +231,21 @@ class _RawEnv(BaseSettings):
             if cleaned:
                 return cleaned
         return ""
+
+    def _backup_is_primary(self, backup_model: str) -> bool:
+        """True when ``LLM_PRIMARY`` selects the backup block as the primary.
+
+        Structural tokens (``bk``/``backup``/``model``/``main``...) are honoured
+        directly; any other value is treated as a model-name hint and matched
+        against the backup model (so ``LLM_PRIMARY=kimi`` picks the kimi block).
+        """
+        pref = (self.llm_primary or "").strip().lower()
+        if pref in _PRIMARY_MAIN_TOKENS:
+            return False
+        if pref in _PRIMARY_BACKUP_TOKENS:
+            return True
+        backup = (backup_model or "").strip().lower()
+        return bool(pref) and bool(backup) and pref in backup
 
     def to_config(self, loaded_files: tuple[Path, ...]) -> EnvConfig:
         """Map the flat env onto :class:`EnvConfig` applying every fallback."""
@@ -264,6 +292,11 @@ class _RawEnv(BaseSettings):
             connect_timeout_sec=self.bk_vision_connect_timeout_sec,
             stall_timeout_sec=self.bk_vision_stall_timeout_sec,
         )
+        # LLM_PRIMARY lets the user pick which conversation provider is tried
+        # first; the other becomes the automatic fallback. Each block keeps its
+        # own stall/timeout tuning, so swapping the objects is safe.
+        if self._backup_is_primary(llm_fallback.model):
+            llm, llm_fallback = llm_fallback, llm
         return EnvConfig(
             llm=llm,
             vision=vision,
@@ -294,5 +327,10 @@ def load_env_config(base_dir: Path | None = None, *, prime: bool = True) -> EnvC
         _logger.info("conversation fallback: %s", config.llm_fallback.describe())
     if config.vision_fallback.is_configured:
         _logger.info("vision fallback: %s", config.vision_fallback.describe())
+    _logger.info(
+        "conversation order: %s -> %s",
+        config.llm.model or "none",
+        config.llm_fallback.model or "none",
+    )
     _logger.info("relay: %s", config.relay.describe())
     return config

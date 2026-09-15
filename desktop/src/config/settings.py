@@ -26,6 +26,7 @@ __all__ = [
     "ConfigStore",
     "PromptsConfig",
     "ConversationConfig",
+    "ResumeConfig",
     "AsrConfig",
     "AudioConfig",
     "ScreenshotConfig",
@@ -34,6 +35,7 @@ __all__ = [
     "WIRE_SETTINGS_KEYS",
     "DEFAULT_CONVERSATION_PROMPT",
     "DEFAULT_SCREENSHOT_PROMPT",
+    "DEFAULT_RESUME_HINT",
     "deep_merge",
 ]
 
@@ -49,6 +51,10 @@ DEFAULT_SCREENSHOT_PROMPT = (
     "分析截图内容并直接回答最重要的问题。\n"
     "如果截图中包含题目，直接给答案并简要解释。\n"
 )
+
+#: Optional instruction inserted into BOTH system prompts telling the model it may
+#: draw on the user's resume (Summary.md). Toggleable via ``resume.hint_enabled``.
+DEFAULT_RESUME_HINT = "在回答涉及我的经历、项目或能力的问题时，可以参考我的简历 Summary.md 来组织答案。"
 
 # Keys of shared/protocol events.schema.json#$defs/settings.
 WIRE_SETTINGS_KEYS: tuple[str, ...] = (
@@ -70,9 +76,23 @@ class PromptsConfig(BaseModel):
 
 
 class ConversationConfig(BaseModel):
-    """Conversation context window."""
+    """Conversation context window + the PC-side answer hotkey."""
 
     context_messages: int = Field(default=10, ge=1, le=50)
+    #: Global hotkey that answers the LATEST message (same as tapping the ask dot).
+    hotkey: str = "<ctrl>+<shift>+<enter>"
+    hotkey_enabled: bool = True
+    hotkey_debounce_sec: float = Field(default=2.0, ge=0)
+    #: How many preceding messages the hotkey answer carries as context. The user
+    #: asked for "last + recent N", counting upward from the newest turn.
+    hotkey_context_messages: int = Field(default=10, ge=0, le=50)
+
+
+class ResumeConfig(BaseModel):
+    """Toggle for the resume-reference line injected into both prompts."""
+
+    hint_enabled: bool = True
+    hint_text: str = DEFAULT_RESUME_HINT
 
 
 class AsrModelsConfig(BaseModel):
@@ -184,6 +204,7 @@ class AppConfig(BaseModel):
     # Fixed personal background injected into BOTH conversation and screenshot
     # requests. Kept local only: never sent to the mobile client or the relay.
     resume_context: str = ""
+    resume: ResumeConfig = Field(default_factory=ResumeConfig)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     asr: AsrConfig = Field(default_factory=AsrConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
@@ -191,6 +212,12 @@ class AppConfig(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     transport: TransportConfig = Field(default_factory=TransportConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+
+    # -- derived --------------------------------------------------------
+    @property
+    def resume_hint(self) -> str:
+        """Resume-reference line to inject, or ``""`` when the toggle is off."""
+        return self.resume.hint_text.strip() if self.resume.hint_enabled else ""
 
     # -- wire mapping ---------------------------------------------------
     def to_wire_settings(self) -> dict[str, Any]:

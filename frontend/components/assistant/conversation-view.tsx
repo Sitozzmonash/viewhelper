@@ -1,7 +1,7 @@
 'use client'
 
 import { MessageSquareText } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useMemo, useRef } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Waveform } from '@/components/waveform'
 import { useRealtimeConversation } from '@/hooks/use-realtime-conversation'
 import { useStreamingAnswer, type AnswerState } from '@/hooks/use-streaming-answer'
@@ -9,6 +9,7 @@ import { useTokenRate } from '@/hooks/use-token-rate'
 import { useWebSocket } from '@/hooks/use-websocket'
 import type { ChatMessage } from '@/lib/realtime/types'
 import { AiAnswerCard } from './ai-answer-card'
+import { AnswerOverlay } from './answer-overlay'
 import { ChatBubble } from './chat-bubble'
 import { StatusBar } from './status-bar'
 
@@ -18,14 +19,15 @@ export function ConversationView() {
   const { answers, isStreaming, start, stop } = useStreamingAnswer()
   const tokenRate = useTokenRate()
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [expanded, setExpanded] = useState(false)
   // Only auto-scroll while the user is already at (or near) the bottom. If they
-  // scrolled up to read an AI answer, incoming ASR messages must not yank the
-  // page down and push that answer out of view.
+  // scrolled up to read the transcript, incoming ASR messages must not yank the
+  // page down.
   const pinnedRef = useRef(true)
 
   const online = pcOnline && status === 'connected'
 
-  // Newest answer per target message_id, so a re-ask replaces the old card.
+  // Newest answer per target message_id, used only to light up a bubble's ask dot.
   const latestByTarget = useMemo(() => {
     const map: Record<string, AnswerState> = {}
     for (const a of Object.values(answers)) {
@@ -36,11 +38,23 @@ export function ConversationView() {
     return map
   }, [answers])
 
+  // The single answer shown in the docked bottom box: the most recent
+  // conversation answer, whether it was asked from the phone or fired by the
+  // PC-side Shift+Ctrl+Enter hotkey.
+  const latestAnswer = useMemo(() => {
+    let best: AnswerState | undefined
+    for (const a of Object.values(answers)) {
+      if (a.mode !== 'conversation') continue
+      if (!best || a.timestamp >= best.timestamp) best = a
+    }
+    return best
+  }, [answers])
+
   const handleAsk = useCallback(
     (message: ChatMessage) => {
       if (isStreaming) return // single active request
       if (!message.isFinal || !message.messageId) return
-      pinnedRef.current = true // asking re-attaches the view to the new answer
+      pinnedRef.current = true
       start('conversation', message.messageId)
     },
     [isStreaming, start],
@@ -60,12 +74,12 @@ export function ConversationView() {
     const el = scrollRef.current
     if (!el) return
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-  }, [messages.length, lastText, isStreaming])
+  }, [messages.length, lastText])
 
-  const hasAnyAnswer = Object.keys(latestByTarget).length > 0
+  const hasAnyAnswer = Boolean(latestAnswer)
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       <div ref={scrollRef} onScroll={handleScroll} className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {messages.length === 0 ? (
           <div className="flex h-full min-h-56 flex-col items-center justify-center px-8 text-center text-muted-foreground">
@@ -90,21 +104,32 @@ export function ConversationView() {
                   canAsk={canAsk}
                   disabled={isStreaming}
                 />
-                {answer ? (
-                  <AiAnswerCard
-                    text={answer.text}
-                    timestamp={answer.timestamp}
-                    isStreaming={answer.status === 'streaming'}
-                    stopped={answer.status === 'stopped'}
-                    error={answer.status === 'error' ? (answer.errorMessage ?? '生成失败') : undefined}
-                    onStop={stop}
-                  />
-                ) : null}
               </Fragment>
             )
           })
         )}
       </div>
+
+      {/* Docked AI-answer box: every answer is concentrated here. Tap to enlarge. */}
+      {latestAnswer ? (
+        <div className="border-t border-border bg-background/95 px-4 py-3 backdrop-blur">
+          <div className="max-h-[38vh] overflow-y-auto">
+            <AiAnswerCard
+              text={latestAnswer.text}
+              timestamp={latestAnswer.timestamp}
+              isStreaming={latestAnswer.status === 'streaming'}
+              stopped={latestAnswer.status === 'stopped'}
+              error={
+                latestAnswer.status === 'error'
+                  ? (latestAnswer.errorMessage ?? '生成失败')
+                  : undefined
+              }
+              onStop={stop}
+              onToggleExpand={() => setExpanded(true)}
+            />
+          </div>
+        </div>
+      ) : null}
 
       {/* Listening indicator row (PRD §16.3). */}
       <div className="flex items-center gap-2 border-t border-border bg-background/95 px-5 py-2 text-[11px] text-muted-foreground backdrop-blur">
@@ -135,6 +160,14 @@ export function ConversationView() {
         }
         tokenRate={isStreaming || hasAnyAnswer ? tokenRate : null}
       />
+
+      {expanded && latestAnswer ? (
+        <AnswerOverlay
+          answer={latestAnswer}
+          onClose={() => setExpanded(false)}
+          onStop={stop}
+        />
+      ) : null}
     </div>
   )
 }

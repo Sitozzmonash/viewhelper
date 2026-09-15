@@ -42,7 +42,14 @@ export function useStreamingAnswer() {
               if (existing) {
                 return {
                   ...prev,
-                  [event.request_id]: { ...existing, mode: event.mode, status: 'streaming' },
+                  [event.request_id]: {
+                    ...existing,
+                    mode: event.mode,
+                    // A PC-initiated (hotkey) answer arrives without a client-side
+                    // target; adopt the one the backend reports so it is attributed.
+                    targetId: existing.targetId ?? event.target_id ?? null,
+                    status: 'streaming',
+                  },
                 }
               }
               return {
@@ -50,7 +57,7 @@ export function useStreamingAnswer() {
                 [event.request_id]: {
                   requestId: event.request_id,
                   mode: event.mode,
-                  targetId: null,
+                  targetId: event.target_id ?? null,
                   text: '',
                   status: 'streaming',
                   tokensPerSecond: null,

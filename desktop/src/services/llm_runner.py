@@ -193,7 +193,10 @@ class LlmRunner:
 
     async def _run(self, job: LlmJob) -> None:
         attempts = self._provider_chain(job)
-        await self._emit(EventType.LLM_STARTED, {"request_id": job.request_id, "mode": job.mode})
+        await self._emit(
+            EventType.LLM_STARTED,
+            {"request_id": job.request_id, "mode": job.mode, "target_id": job.target_id},
+        )
 
         status: AnswerStatus = "error"
         error_message: str | None = "no provider available"

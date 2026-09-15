@@ -23,10 +23,25 @@ prompts:
 # `config.yaml` only -- it is never sent to the mobile client or the cloud.
 resume_context: ""
 
+# resume: a short, toggleable instruction inserted into both system prompts
+# telling the model it may draw on the resume (Summary.md). The hint TEXT is not
+# secret, but keep it here (PC-side) rather than on the mobile client.
+resume:
+  hint_enabled: true
+  hint_text: "在回答涉及我的经历、项目或能力的问题时，可以参考我的简历 Summary.md 来组织答案。"
+
 conversation:
   # Number of previous FINAL messages sent as context together with the
   # explicitly marked target message (PRD 9). Range: 1..50.
   context_messages: 10
+  # PC-side global hotkey that answers the LATEST turn (the keyboard equivalent
+  # of tapping a bubble's ask dot on the phone). pynput GlobalHotKeys syntax.
+  hotkey: "<ctrl>+<shift>+<enter>"
+  hotkey_enabled: true
+  hotkey_debounce_sec: 2.0
+  # How many preceding messages the hotkey answer carries as context, counted
+  # upward from the newest turn regardless of speaker ("last + recent N"). 0..50.
+  hotkey_context_messages: 10
 
 asr:
   # Set to false to run without any local ASR (transport/LLM still work).
