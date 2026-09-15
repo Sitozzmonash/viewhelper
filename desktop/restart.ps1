@@ -2,13 +2,20 @@
 <#
 .SYNOPSIS
     Restart the viewhelper desktop app (stop, then start).
+.DESCRIPTION
+    Pass -Close (or --close) to forward the flag to start.ps1, restarting into
+    pure screenshot mode without audio capture or ASR model loading.
 .NOTES
     stop.ps1 waits for the old process to actually exit (graceful, then force),
     so start.ps1 can never race it into two concurrent processes.
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding = $false)]
 param(
-    [int]$GracefulTimeoutSec = 15
+    [int]$GracefulTimeoutSec = 15,
+    [switch]$Close,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [ValidateSet('--close')]
+    [string[]]$ExtraArgs
 )
 
 Set-StrictMode -Version Latest
@@ -22,7 +29,13 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-& (Join-Path $Root 'start.ps1')
+$closeRequested = $Close.IsPresent -or ($ExtraArgs -contains '--close')
+$startScript = Join-Path $Root 'start.ps1'
+if ($closeRequested) {
+    & $startScript -Close
+} else {
+    & $startScript
+}
 if ($LASTEXITCODE -ne 0) {
     Write-Host "RESTART FAILED (start exit code $LASTEXITCODE)"
     exit $LASTEXITCODE

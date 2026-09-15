@@ -2,13 +2,21 @@
 <#
 .SYNOPSIS
     Start the viewhelper desktop app as a detached background process.
+.DESCRIPTION
+    Pass -Close (or --close) to disable audio capture and ASR models, running
+    pure screenshot mode with zero GPU/VRAM footprint for models.
 .NOTES
     The process survives closing this terminal (Start-Process gives it its own
     hidden console). PID is stored in runtime\app.pid; stdout/stderr go to
     runtime\logs\app-<timestamp>.{out,err}.log.
 #>
 [CmdletBinding()]
-param()
+param(
+    [switch]$Close,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [ValidateSet('--close')]
+    [string[]]$ExtraArgs
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -65,8 +73,14 @@ $Stamp  = Get-Date -Format 'yyyyMMdd-HHmmss'
 $OutLog = Join-Path $LogDir "app-$Stamp.out.log"
 $ErrLog = Join-Path $LogDir "app-$Stamp.err.log"
 
+$pyArgs = @('-m', 'src.main')
+$closeRequested = $Close.IsPresent -or ($ExtraArgs -contains '--close')
+if ($closeRequested) {
+    $pyArgs += '--close'
+}
+
 $proc = Start-Process -FilePath $PythonExe `
-    -ArgumentList '-m', 'src.main' `
+    -ArgumentList $pyArgs `
     -WorkingDirectory $Root `
     -WindowStyle Hidden `
     -RedirectStandardOutput $OutLog `
@@ -85,7 +99,8 @@ if ($null -eq $alive) {
     exit 1
 }
 
-Write-Host "STARTED PID=$($proc.Id)"
+$modeText = if ($closeRequested) { ' (no-audio / pure screenshot mode)' } else { '' }
+Write-Host "STARTED PID=$($proc.Id)$modeText"
 Write-Host "python : $PythonExe"
 Write-Host "logs   : $OutLog"
 Write-Host "         $ErrLog"

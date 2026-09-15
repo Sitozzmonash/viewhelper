@@ -334,7 +334,11 @@ class DesktopApplication:
         # Second global hotkey: answer the latest conversation turn (Shift+Ctrl+Enter),
         # the keyboard equivalent of tapping a bubble's ask dot on the phone.
         conversation_hotkey: ScreenshotHotkey | None = None
-        if config.config.conversation.hotkey_enabled:
+        if (
+            self.options.enable_audio
+            and config.config.asr.enabled
+            and config.config.conversation.hotkey_enabled
+        ):
             conversation_hotkey = ScreenshotHotkey(
                 hotkey=config.config.conversation.hotkey,
                 debounce_sec=config.config.conversation.hotkey_debounce_sec,
@@ -385,7 +389,7 @@ class DesktopApplication:
         )
         _logger.info(
             "asr: enabled=%s show_partial=%s hotwords=%r context_messages=%d",
-            cfg.asr.enabled,
+            cfg.asr.enabled and self.options.enable_audio,
             cfg.asr.show_partial,
             cfg.asr.hotwords,
             cfg.conversation.context_messages,
@@ -403,7 +407,7 @@ class DesktopApplication:
         _logger.info(
             "hotkey: %s (debounce %.1fs)", cfg.screenshot.hotkey, cfg.screenshot.debounce_sec
         )
-        if cfg.conversation.hotkey_enabled:
+        if self._conversation_hotkey is not None:
             _logger.info(
                 "conversation hotkey: %s (debounce %.1fs, context %d)",
                 cfg.conversation.hotkey,
@@ -659,7 +663,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", type=Path, default=None, help="path to config.yaml")
     parser.add_argument("--log-level", default=None, help="DEBUG / INFO / WARNING / ERROR")
-    parser.add_argument("--no-audio", action="store_true", help="do not start capture/ASR")
+    parser.add_argument(
+        "--no-audio",
+        "--close",
+        dest="no_audio",
+        action="store_true",
+        help="do not start capture/ASR (pure screenshot mode; aliases: --close)",
+    )
     parser.add_argument("--no-relay", action="store_true", help="do not connect to the relay")
     parser.add_argument(
         "--check",

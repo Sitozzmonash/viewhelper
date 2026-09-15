@@ -12,13 +12,20 @@ Contract under test (used later by the PowerShell management scripts):
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
+import sys
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 import src.main as main_module
 from src.config.paths import runtime_dir, stop_file_path
+from src.config.settings import ConfigStore
 from src.main import DesktopApplication, RuntimeOptions
+from src.services.llm_runner import SubmitResult
+from src.transport.protocol import EventType
 from src.util.sentinel import StopFileSentinel
 
 # ----------------------------------------------------------------- unit tests
@@ -168,3 +175,113 @@ async def test_app_request_stop_shuts_down_without_stop_file(
     assert exit_code == 0
     assert not stop_file_path(base).exists()  # nothing to consume
     assert app.sentinel is not None and app.sentinel.triggered is False
+
+
+def test_build_parser_close_flag() -> None:
+    parser = main_module.build_parser()
+    assert parser.parse_args(["--close"]).no_audio is True
+    assert parser.parse_args(["--no-audio"]).no_audio is True
+    assert parser.parse_args([]).no_audio is False
+    assert RuntimeOptions().enable_audio is True
+
+
+@pytest.mark.parametrize(
+    ("enable_audio", "config_enabled"), [(True, True), (False, True), (True, False), (False, False)]
+)
+async def test_audio_mode_keeps_screenshot_services_and_selects_subsystems(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_config,
+    enable_audio: bool,
+    config_enabled: bool,
+) -> None:
+    base = tmp_path / "desktop"
+    base.mkdir()
+    store = ConfigStore(base_dir=base, bootstrap_from_example=False)
+    store.update({"asr": {"enabled": config_enabled}, "interview_notes": {"enabled": False}})
+    before = store.path.read_bytes()
+    monkeypatch.setattr(main_module, "load_env_config", lambda *_: env_config)
+    app = DesktopApplication(RuntimeOptions(base_dir=base, enable_audio=enable_audio))
+    selected: set[str] = set()
+
+    def supervise(name, factory):
+        selected.add(name)
+        return asyncio.create_task(app._stop_event.wait(), name=name)
+
+    monkeypatch.setattr(app, "_supervise", supervise)
+    tasks = set()
+    try:
+        app.build()
+        create_pipeline = Mock(side_effect=AssertionError("must not create ASR pipelines"))
+        monkeypatch.setattr(app.services["transcription"], "create_pipeline", create_pipeline)
+        tasks = app._supervised_tasks()
+        expected = {"relay", "hotkey", "status"}
+        if enable_audio and config_enabled:
+            expected.update({"asr-mic", "asr-loopback", "conversation-hotkey"})
+        assert selected == expected
+        assert (app._conversation_hotkey is not None) == (enable_audio and config_enabled)
+        assert app.status()["pipelines"] == {}
+        assert app.status()["partials"] == app.status()["finals"] == 0
+        create_pipeline.assert_not_called()
+        screenshot = app.services["screenshot"]
+        assert app._hotkey is not None
+        assert (
+            main_module.build_handlers(
+                app.services["llm"], screenshot, app.services["history"], app.services["settings"]
+            )[EventType.CAPTURE_SCREEN]
+            == screenshot.handle_capture_screen
+        )
+        submit = AsyncMock(return_value=SubmitResult(accepted=True))
+        monkeypatch.setattr(app.services["runner"], "submit", submit)
+        assert await screenshot.analyze_image(
+            screenshot_id="test-shot",
+            request_id="test-request",
+            image_data_url="data:image/jpeg;base64,QUJD",
+        )
+        assert submit.await_args.args[0].mode == "screenshot"
+        assert app.config.asr.enabled == config_enabled
+        assert store.path.read_bytes() == before
+    finally:
+        await app.shutdown()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def test_importing_desktop_does_not_load_asr_dependencies() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import src.main; "
+            "assert not {'torch', 'funasr', 'sounddevice', 'pyaudiowpatch'} & sys.modules.keys()",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(shutil.which("powershell") is None, reason="requires Windows PowerShell")
+@pytest.mark.parametrize("script_name", ["start.ps1", "restart.ps1"])
+@pytest.mark.parametrize("flag", ["", "-Close", "--close", "--clos"])
+def test_powershell_mode_arguments(script_name: str, flag: str) -> None:
+    path = Path(__file__).resolve().parents[1] / script_name
+    command = (
+        "$ErrorActionPreference = 'Stop'; "
+        f"$ast = [System.Management.Automation.Language.Parser]::ParseFile('{path}', [ref]$null, [ref]$null); "
+        '$attributes = ($ast.ParamBlock.Attributes | ForEach-Object { $_.Extent.Text }) -join "`n"; '
+        '$probe = [scriptblock]::Create($attributes + "`n" + $ast.ParamBlock.Extent.Text + '
+        "'\n$Close.IsPresent -or ($ExtraArgs -contains ''--close'')'); "
+        f"& $probe {flag}"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", command],
+        capture_output=True,
+        timeout=30,
+    )
+    if flag == "--clos":
+        assert result.returncode != 0
+    else:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == (b"True" if flag else b"False")
