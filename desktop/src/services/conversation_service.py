@@ -106,6 +106,8 @@ class ConversationService(ServiceBase):
             target=target,
             resume_context=cfg.resume_context,
             resume_hint=cfg.resume_hint,
+            interview_notes=cfg.interview_notes_text,
+            notes_hint=cfg.interview_notes_hint,
         )
         _logger.info("conversation request %s: %s", request_id, describe_request(target, context))
 

@@ -44,11 +44,13 @@ def build_vision_messages(
     detail: str | None = None,
     resume_context: str = "",
     resume_hint: str = "",
+    interview_notes: str = "",
+    notes_hint: str = "",
     context: Sequence[ConversationTurn] = (),
 ) -> list[ChatMessage]:
     """Assemble the chat messages for a screenshot LLM request.
 
-    Structure: system (resume_context + screenshot prompt), optional
+    Structure: system (resume block + notes block + screenshot prompt), optional
     ``【对话上下文】`` user message (the interviewer often asks the screenshot
     question by voice), then the image itself.
     """
@@ -62,7 +64,9 @@ def build_vision_messages(
     messages: list[ChatMessage] = [
         {
             "role": "system",
-            "content": compose_system_prompt(system_prompt, resume_context, resume_hint),
+            "content": compose_system_prompt(
+                system_prompt, resume_context, resume_hint, interview_notes, notes_hint
+            ),
         }
     ]
     context_block = render_context(context)
@@ -85,11 +89,13 @@ def describe_vision_request(
     model: str | None = None,
     context_messages: int = 0,
     resume_chars: int = 0,
+    notes_chars: int = 0,
 ) -> dict[str, Any]:
-    """Log-safe summary (payload sizes only, never the base64/resume bodies)."""
+    """Log-safe summary (payload sizes only, never the base64/resume/notes bodies)."""
     return {
         "model": model or "?",
         "image_data_url_chars": len(image_data_url or ""),
         "context_messages": context_messages,
         "resume_context_chars": resume_chars,
+        "interview_notes_chars": notes_chars,
     }

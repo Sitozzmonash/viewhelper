@@ -233,6 +233,30 @@ class AsrPipeline:
         finally:
             await asyncio.to_thread(self._frames.stop)
 
+    def unload(self) -> None:
+        """Release the loaded components and stream state (idempotent).
+
+        Called from the event loop thread *after* the worker thread of
+        :meth:`run` has exited -- i.e. on the supervisor restart path or at
+        shutdown -- so it never races with ``_worker_loop``. Frames are owned by
+        the factory / ``run()``'s ``finally`` block and are not stopped here.
+        """
+        components = self._components
+        self._components = None
+        if components is not None:
+            # EnergyVad is pure numpy and has no unload(); only FunASR-backed
+            # components hold model references worth dropping.
+            for component in (
+                components.vad,
+                components.streaming,
+                components.finalizer,
+                components.punctuation,
+            ):
+                unload = getattr(component, "unload", None)
+                if callable(unload):
+                    unload()
+        self._reset_stream_state()
+
     def _reset_stream_state(self) -> None:
         self._utterance = None
         self._preroll.clear()

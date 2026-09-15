@@ -15,6 +15,7 @@ interleave their insert/emit pairs.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Callable
 from typing import Any
 
@@ -60,6 +61,16 @@ class TranscriptionService(ServiceBase):
     ) -> AsrPipeline:
         """Build (and remember) the pipeline for one audio source."""
         cfg = config or self._config.config
+        previous = self._pipelines.get(source)
+        if previous is not None:
+            # The supervisor restart path calls this factory again while the old
+            # pipeline object is still referenced here: release it explicitly.
+            _logger.warning(
+                "replacing %s after restart; releasing the previous pipeline",
+                previous.name,
+            )
+            previous.request_stop()
+            previous.unload()
         pipeline = AsrPipeline(
             speaker=speaker,
             source=source,
@@ -176,3 +187,6 @@ class TranscriptionService(ServiceBase):
         pending = await self.wait_tasks(timeout=3.0)
         if pending:
             _logger.warning("%d transcription task(s) still pending at shutdown", pending)
+        for pipeline in self._pipelines.values():
+            with contextlib.suppress(Exception):  # unload must not block process exit
+                pipeline.unload()

@@ -45,3 +45,6 @@ Thumbs.db
 # personal resume — NEVER commit
 docs/简历Summary.md
 docs/简历*.md
+
+# personal interview notes (八股) — NEVER commit
+docs/大厂面试八股.md

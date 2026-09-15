@@ -17,7 +17,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, ValidationError
 
-from src.config.paths import DESKTOP_DIR, config_path, example_config_path
+from src.config.paths import DESKTOP_DIR, REPO_ROOT, config_path, example_config_path
 from src.util.files import atomic_write_text, ensure_dir
 from src.util.log import get_logger
 
@@ -27,6 +27,7 @@ __all__ = [
     "PromptsConfig",
     "ConversationConfig",
     "ResumeConfig",
+    "InterviewNotesConfig",
     "AsrConfig",
     "AudioConfig",
     "ScreenshotConfig",
@@ -36,6 +37,7 @@ __all__ = [
     "DEFAULT_CONVERSATION_PROMPT",
     "DEFAULT_SCREENSHOT_PROMPT",
     "DEFAULT_RESUME_HINT",
+    "DEFAULT_NOTES_HINT",
     "deep_merge",
 ]
 
@@ -66,6 +68,15 @@ DEFAULT_SCREENSHOT_PROMPT = (
 #: the model has no filesystem, so naming a file like Summary.md would be useless.
 #: Toggleable via ``resume.hint_enabled``.
 DEFAULT_RESUME_HINT = "在回答涉及我的经历、项目或能力的问题时，请结合上面【resume_context】中的简历内容来组织答案。"
+
+#: Optional instruction inserted into BOTH system prompts telling the model to
+#: prefer the interview notes injected above it (the ``【interview_notes】``
+#: block) and to combine them with the resume experience. Toggleable via
+#: ``interview_notes.hint_enabled``.
+DEFAULT_NOTES_HINT = (
+    "回答面试问题时，请优先参考上面【interview_notes】中的八股要点，"
+    "并结合【resume_context】里的简历经历组织答案。"
+)
 
 # Keys of shared/protocol events.schema.json#$defs/settings.
 WIRE_SETTINGS_KEYS: tuple[str, ...] = (
@@ -104,6 +115,25 @@ class ResumeConfig(BaseModel):
 
     hint_enabled: bool = True
     hint_text: str = DEFAULT_RESUME_HINT
+
+
+class InterviewNotesConfig(BaseModel):
+    """Bulk interview notes injected into both prompts (local file, read-only).
+
+    The content is loaded from *path* on demand: relative paths are resolved
+    against the repository root, absolute paths are used as-is. Like
+    ``resume_context`` the text never leaves the PC (never in
+    ``to_wire_settings()``, never logged).
+    """
+
+    enabled: bool = True
+    #: Relative paths are resolved against the repository root (``docs/...``).
+    path: str = "docs/大厂面试八股.md"
+    #: 0 = keep the whole file; >0 = keep the first N characters and append an
+    #: omission marker.
+    max_chars: int = Field(default=0, ge=0)
+    hint_enabled: bool = True
+    hint_text: str = DEFAULT_NOTES_HINT
 
 
 class AsrModelsConfig(BaseModel):
@@ -216,6 +246,9 @@ class AppConfig(BaseModel):
     # requests. Kept local only: never sent to the mobile client or the relay.
     resume_context: str = ""
     resume: ResumeConfig = Field(default_factory=ResumeConfig)
+    # Interview-notes file injected into BOTH requests right after the resume
+    # block. Also local only: the file content is never sent to mobile/relay.
+    interview_notes: InterviewNotesConfig = Field(default_factory=InterviewNotesConfig)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     asr: AsrConfig = Field(default_factory=AsrConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
@@ -229,6 +262,38 @@ class AppConfig(BaseModel):
     def resume_hint(self) -> str:
         """Resume-reference line to inject, or ``""`` when the toggle is off."""
         return self.resume.hint_text.strip() if self.resume.hint_enabled else ""
+
+    @property
+    def interview_notes_text(self) -> str:
+        """Local interview-notes text, or ``""`` when unavailable.
+
+        Never raises: disabled / missing / unreadable / blank files all yield
+        ``""`` (the reason is reported once by the startup summary). The text is
+        local only and must never appear in logs, wire payloads or tests.
+        """
+        notes = self.interview_notes
+        if not notes.enabled:
+            return ""
+        raw_path = notes.path.strip()
+        if not raw_path:
+            return ""
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = REPO_ROOT / path
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+        if not text:
+            return ""
+        if notes.max_chars > 0 and len(text) > notes.max_chars:
+            text = text[: notes.max_chars].rstrip() + "\n…（interview_notes 已截断）"
+        return text
+
+    @property
+    def interview_notes_hint(self) -> str:
+        """Notes-reference line to inject, or ``""`` when the toggle is off."""
+        return self.interview_notes.hint_text.strip() if self.interview_notes.hint_enabled else ""
 
     # -- wire mapping ---------------------------------------------------
     def to_wire_settings(self) -> dict[str, Any]:

@@ -2,25 +2,32 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from src.config import settings as settings_module
 from src.config.settings import (
     DEFAULT_CONVERSATION_PROMPT,
     DEFAULT_SCREENSHOT_PROMPT,
+    AppConfig,
     ConfigStore,
 )
 from src.llm.conversation import (
     CONTEXT_HEADER,
+    NOTES_HEADER,
+    RESUME_HEADER,
     TARGET_HEADER,
     ConversationTurn,
     TargetNotFound,
     build_conversation_messages,
     build_from_records,
+    compose_system_prompt,
     render_context,
     select_context,
     speaker_label,
 )
-from src.llm.vision import build_vision_messages
+from src.llm.vision import build_vision_messages, describe_vision_request
 from src.services.conversation_service import ConversationService
 from src.services.llm_runner import LlmJob, SubmitResult
 from src.services.screenshot_service import ScreenshotService
@@ -228,3 +235,162 @@ async def test_conversation_service_reports_missing_message(
     errors = transport.payloads("llm_error")
     assert len(errors) == 2
     assert all(payload["request_id"] in ("req-2", "req-3") for payload in errors)
+
+
+# --------------------------------------------------- interview notes injection
+# NOTE: tests use throwaway files only -- never the real personal notes/resume.
+
+
+def test_compose_system_prompt_orders_resume_then_notes_then_prompt() -> None:
+    composed = compose_system_prompt(
+        "PROMPT",
+        resume_context="RESUME-BODY",
+        resume_hint="USE-RESUME",
+        interview_notes="NOTES-BODY",
+        notes_hint="USE-NOTES",
+    )
+    assert composed == (
+        f"{RESUME_HEADER}\nRESUME-BODY\n\nUSE-RESUME\n\n"
+        f"{NOTES_HEADER}\nNOTES-BODY\n\nUSE-NOTES\n\nPROMPT"
+    )
+
+
+def test_compose_system_prompt_drops_hints_without_their_block() -> None:
+    hints_without_blocks = compose_system_prompt(
+        "PROMPT", resume_hint="USE-RESUME", notes_hint="USE-NOTES"
+    )
+    assert hints_without_blocks == "PROMPT"
+    notes_only = compose_system_prompt("PROMPT", interview_notes="NOTES-BODY", notes_hint="USE-NOTES")
+    assert notes_only == f"{NOTES_HEADER}\nNOTES-BODY\n\nUSE-NOTES\n\nPROMPT"
+
+
+def test_message_builders_forward_interview_notes() -> None:
+    conversation = build_conversation_messages(
+        system_prompt="SYS",
+        context=turns(2),
+        target=turns(3)[2],
+        interview_notes="NOTES-BODY",
+        notes_hint="USE-NOTES",
+    )
+    system = conversation[0]["content"]
+    assert f"{NOTES_HEADER}\nNOTES-BODY" in system and "USE-NOTES" in system
+    assert system.endswith("SYS")
+
+    vision = build_vision_messages(
+        system_prompt=DEFAULT_SCREENSHOT_PROMPT,
+        image_data_url="data:image/jpeg;base64,QUJD",
+        interview_notes="NOTES-BODY",
+        notes_hint="USE-NOTES",
+    )
+    vision_system = vision[0]["content"]
+    assert f"{NOTES_HEADER}\nNOTES-BODY" in vision_system and "USE-NOTES" in vision_system
+
+
+def test_build_from_records_forwards_interview_notes() -> None:
+    history = [
+        MessageRecord(id=f"m-{i}", speaker="me", source="mic", text=f"文本{i}", created_at=i)
+        for i in range(2)
+    ]
+    messages, _, _ = build_from_records(
+        system_prompt="SYS",
+        history=history,
+        target_id="m-1",
+        limit=5,
+        interview_notes="NOTES-BODY",
+    )
+    assert f"{NOTES_HEADER}\nNOTES-BODY" in messages[0]["content"]
+
+
+def test_describe_vision_request_reports_notes_length_only() -> None:
+    description = describe_vision_request(
+        "data:image/jpeg;base64,QUJD",
+        "model-x",
+        context_messages=2,
+        resume_chars=11,
+        notes_chars=7,
+    )
+    assert description["interview_notes_chars"] == 7
+    assert description["resume_context_chars"] == 11
+    assert "NOTES-BODY" not in str(description)
+
+
+def _write_notes(tmp_path: Path, text: str) -> str:
+    notes_file = tmp_path / "notes.md"
+    notes_file.write_text(text, encoding="utf-8")
+    return str(notes_file)
+
+
+def test_interview_notes_text_reads_absolute_path(tmp_path: Path) -> None:
+    cfg = AppConfig(interview_notes={"path": _write_notes(tmp_path, "  NOTE-ONE\nNOTE-TWO  ")})
+    assert cfg.interview_notes_text == "NOTE-ONE\nNOTE-TWO"
+
+
+def test_interview_notes_text_missing_blank_or_disabled_is_empty(tmp_path: Path) -> None:
+    missing = AppConfig(interview_notes={"path": str(tmp_path / "missing.md")})
+    assert missing.interview_notes_text == ""
+    blank = AppConfig(interview_notes={"path": _write_notes(tmp_path, "   \n")})
+    assert blank.interview_notes_text == ""
+    disabled = AppConfig(
+        interview_notes={"enabled": False, "path": _write_notes(tmp_path, "NOTE-ONE")}
+    )
+    assert disabled.interview_notes_text == ""
+
+
+def test_interview_notes_text_respects_max_chars(tmp_path: Path) -> None:
+    path = _write_notes(tmp_path, "A" * 50 + "B" * 50)
+    truncated = AppConfig(interview_notes={"path": path, "max_chars": 50}).interview_notes_text
+    assert truncated.startswith("A" * 50)
+    assert "B" not in truncated
+    assert "截断" in truncated  # omission marker appended
+    assert AppConfig(interview_notes={"path": path, "max_chars": 0}).interview_notes_text == (
+        "A" * 50 + "B" * 50
+    )
+    assert AppConfig(interview_notes={"path": path, "max_chars": 500}).interview_notes_text == (
+        "A" * 50 + "B" * 50
+    )
+
+
+def test_interview_notes_text_relative_path_resolves_under_repo_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings_module, "REPO_ROOT", tmp_path)
+    target = tmp_path / "docs" / "notes.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("REL-OK", encoding="utf-8")
+    cfg = AppConfig(interview_notes={"path": "docs/notes.md"})
+    assert cfg.interview_notes_text == "REL-OK"
+
+
+def test_interview_notes_never_reach_wire_settings(tmp_path: Path) -> None:
+    cfg = AppConfig(interview_notes={"path": _write_notes(tmp_path, "NOTE-ONE")})
+    payload = cfg.to_wire_settings()
+    assert "interview_notes" not in payload
+    assert "NOTE-ONE" not in str(payload)
+
+
+async def test_services_inject_interview_notes_into_both_paths(
+    tmp_path: Path, database: Database, config_store: ConfigStore, env_config, transport
+) -> None:
+    notes_path = _write_notes(tmp_path, "NOTES-BODY")
+    config_store.update({"interview_notes": {"path": notes_path}}, persist=False)
+    record = database.insert_message(text="目标句子", speaker="other", source="system")
+    runner = FakeRunner()
+
+    conversation = ConversationService(
+        db=database, config=config_store, env=env_config, runner=runner, transport=transport
+    )
+    assert await conversation.start_conversation_request("req-notes", record.id) is True
+    assert f"{NOTES_HEADER}\nNOTES-BODY" in all_contents(runner.jobs[0].messages)
+
+    screenshot = ScreenshotService(
+        db=database, config=config_store, env=env_config, runner=runner, transport=transport
+    )
+    assert (
+        await screenshot.analyze_image(
+            screenshot_id="ss-1",
+            request_id="req-notes-2",
+            image_data_url="data:image/jpeg;base64,QUJD",
+        )
+        is True
+    )
+    assert f"{NOTES_HEADER}\nNOTES-BODY" in all_contents(runner.jobs[1].messages)

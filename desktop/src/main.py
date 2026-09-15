@@ -390,6 +390,16 @@ class DesktopApplication:
             cfg.asr.hotwords,
             cfg.conversation.context_messages,
         )
+        # Interview notes: report only the path and the loaded length, never
+        # the content itself.
+        notes = cfg.interview_notes
+        notes_text = cfg.interview_notes_text
+        if not notes.enabled:
+            _logger.info("interview notes: disabled")
+        elif notes_text:
+            _logger.info("interview notes: %s (%d chars)", notes.path, len(notes_text))
+        else:
+            _logger.info("interview notes: %s (missing or empty)", notes.path)
         _logger.info(
             "hotkey: %s (debounce %.1fs)", cfg.screenshot.hotkey, cfg.screenshot.debounce_sec
         )

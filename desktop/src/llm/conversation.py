@@ -2,9 +2,14 @@
 
 Structure sent to the provider::
 
-    system: conversation prompt (never the screenshot prompt)
+    system: optional 【resume_context】 block (+ hint), optional
+            【interview_notes】 block (+ hint), then the conversation prompt
+            (never the screenshot prompt)
     user:   【对话上下文】 last N FINAL messages, rendered as "对方: ..." / "我: ..."
     user:   【目标消息】  the bubble the user tapped, explicitly marked
+
+The two personal blocks are local-only (``resume_context`` /
+``interview_notes``); only their lengths may ever be logged.
 """
 
 from __future__ import annotations
@@ -28,21 +33,33 @@ __all__ = [
     "CONTEXT_HEADER",
     "TARGET_HEADER",
     "RESUME_HEADER",
+    "NOTES_HEADER",
 ]
 
 CONTEXT_HEADER = "【对话上下文】"
 TARGET_HEADER = "【目标消息】"
 TARGET_INSTRUCTION = f"请针对{TARGET_HEADER}给出回答。"
 RESUME_HEADER = "【resume_context】"
+NOTES_HEADER = "【interview_notes】"
 
 
 def compose_system_prompt(
-    system_prompt: str, resume_context: str = "", resume_hint: str = ""
+    system_prompt: str,
+    resume_context: str = "",
+    resume_hint: str = "",
+    interview_notes: str = "",
+    notes_hint: str = "",
 ) -> str:
-    """System message: resume_context block, then the resume hint, then the prompt."""
+    """System message: resume block (+ hint), notes block (+ hint), then the prompt.
+
+    Each hint refers to the block directly above it, so a hint is only added
+    when its block is actually present (same rule as the resume hint).
+    """
     prompt = system_prompt.strip()
     resume = (resume_context or "").strip()
     hint = (resume_hint or "").strip()
+    notes = (interview_notes or "").strip()
+    notes_line = (notes_hint or "").strip()
     blocks: list[str] = []
     if resume:
         blocks.append(f"{RESUME_HEADER}\n{resume}")
@@ -50,6 +67,10 @@ def compose_system_prompt(
         # makes sense when that block is actually present.
         if hint:
             blocks.append(hint)
+    if notes:
+        blocks.append(f"{NOTES_HEADER}\n{notes}")
+        if notes_line:
+            blocks.append(notes_line)
     blocks.append(prompt)
     return "\n\n".join(block for block in blocks if block)
 
@@ -135,12 +156,16 @@ def build_conversation_messages(
     target: ConversationTurn,
     resume_context: str = "",
     resume_hint: str = "",
+    interview_notes: str = "",
+    notes_hint: str = "",
 ) -> list[ChatMessage]:
     """Assemble the chat messages for a conversation LLM request."""
     messages: list[ChatMessage] = [
         {
             "role": "system",
-            "content": compose_system_prompt(system_prompt, resume_context, resume_hint),
+            "content": compose_system_prompt(
+                system_prompt, resume_context, resume_hint, interview_notes, notes_hint
+            ),
         }
     ]
     context_block = render_context(context)
@@ -167,6 +192,8 @@ def build_from_records(
     limit: int,
     resume_context: str = "",
     resume_hint: str = "",
+    interview_notes: str = "",
+    notes_hint: str = "",
 ) -> tuple[list[ChatMessage], ConversationTurn, list[ConversationTurn]]:
     """Convenience wrapper over storage records.
 
@@ -180,6 +207,8 @@ def build_from_records(
         target=target,
         resume_context=resume_context,
         resume_hint=resume_hint,
+        interview_notes=interview_notes,
+        notes_hint=notes_hint,
     )
     return messages, target, context
 

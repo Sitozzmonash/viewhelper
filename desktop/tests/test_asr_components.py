@@ -18,7 +18,9 @@ from src.asr.hotwords import MAX_HOTWORDS, HotwordSet, merge_hotwords, parse_hot
 from src.asr.pipeline import AsrPipeline, FinalTranscript
 from src.asr.shared_models import SharedAsrModels
 from src.asr.vad import EnergyVad, VadEvent
-from src.config.settings import AsrConfig, EnergyVadConfig
+from src.config.settings import AsrConfig, ConfigStore, EnergyVadConfig
+from src.services import transcription_service as transcription_module
+from src.storage.sqlite import Database
 
 SAMPLE_RATE = 16000
 BLOCK = SAMPLE_RATE // 10  # 100 ms
@@ -547,3 +549,118 @@ async def test_pipeline_update_settings_is_thread_safe(patched_components: None)
     task = asyncio.create_task(pipeline.run())
     await asyncio.wait_for(task, timeout=5.0)
     assert pipeline.stats()["utterances"] == 0
+
+
+def test_pipeline_unload_releases_every_component_and_is_idempotent(
+    patched_components: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """unload() must drop all four component models and clear the stream state."""
+    unloaded: list[str] = []
+
+    class TrackingFsmnVad(FakeFsmnVad):
+        def load(self) -> bool:
+            return True  # keep the FunASR VAD path, which does have unload()
+
+        def unload(self) -> None:
+            unloaded.append("vad")
+
+    class TrackingStreaming(FakeStreaming):
+        def unload(self) -> None:
+            unloaded.append("streaming")
+
+    class TrackingFinalizer(FakeFinalizer):
+        def unload(self) -> None:
+            unloaded.append("finalizer")
+
+    class TrackingPunctuation(FakePunctuation):
+        def unload(self) -> None:
+            unloaded.append("punctuation")
+
+    monkeypatch.setattr(pipeline_module, "FsmnVad", TrackingFsmnVad)
+    monkeypatch.setattr(pipeline_module, "StreamingRecognizer", TrackingStreaming)
+    monkeypatch.setattr(pipeline_module, "OfflineFinalizer", TrackingFinalizer)
+    monkeypatch.setattr(pipeline_module, "PunctuationRestorer", TrackingPunctuation)
+
+    pipeline = AsrPipeline(
+        speaker="me", source="mic", frames=FakeFrames([]), config=asr_config(), sample_rate=SAMPLE_RATE
+    )
+    assert pipeline._load_components().vad_backend == "fsmn-vad"
+    assert pipeline.models_available is True
+    # An in-flight utterance must not survive unload().
+    pipeline._begin_utterance(0.0)
+    pipeline._preroll.append(block(0))
+    assert pipeline._utterance is not None
+
+    pipeline.unload()
+
+    expected = ["vad", "streaming", "finalizer", "punctuation"]
+    assert unloaded == expected
+    assert pipeline._components is None
+    assert pipeline.models_available is False
+    assert pipeline.vad_backend == "unloaded"
+    assert pipeline._utterance is None
+    assert not pipeline._preroll
+
+    pipeline.unload()  # idempotent: neither raises nor unloads twice
+    assert unloaded == expected
+
+
+def test_pipeline_unload_is_safe_before_load_and_with_the_energy_vad(
+    patched_components: None,
+) -> None:
+    """``_components is None`` and the unload-less EnergyVad must not raise."""
+    pipeline = AsrPipeline(
+        speaker="me", source="mic", frames=FakeFrames([]), config=asr_config(), sample_rate=SAMPLE_RATE
+    )
+    pipeline.unload()  # never loaded
+    assert pipeline.models_available is False
+
+    assert pipeline._load_components().vad_backend == "energy-vad"
+    pipeline.unload()  # EnergyVad has no unload() -> skipped, not fatal
+    assert pipeline._components is None
+
+
+# ------------------------------------------------------- TranscriptionService
+
+
+class RecordingPipeline:
+    """Stand-in for :class:`AsrPipeline` recording the lifecycle calls."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.name = f"fake[{kwargs.get('source')}]"
+        self.stops = 0
+        self.unloads = 0
+
+    def request_stop(self) -> None:
+        self.stops += 1
+
+    def unload(self) -> None:
+        self.unloads += 1
+
+
+def test_create_pipeline_replaces_and_unloads_the_previous_instance(
+    database: Database, config_store: ConfigStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Supervisor restart: the factory re-run must stop + unload the old pipeline."""
+    monkeypatch.setattr(transcription_module, "AsrPipeline", RecordingPipeline)
+    service = transcription_module.TranscriptionService(db=database, config=config_store)
+
+    first = service.create_pipeline(FakeFrames([]), speaker="me", source="mic")
+    second = service.create_pipeline(FakeFrames([]), speaker="me", source="mic")
+
+    assert first is not second
+    assert (first.stops, first.unloads) == (1, 1)
+    assert (second.stops, second.unloads) == (0, 0)  # the fresh instance stays untouched
+    assert service.pipelines == {"mic": second}
+
+
+async def test_shutdown_unloads_every_remaining_pipeline(
+    database: Database, config_store: ConfigStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(transcription_module, "AsrPipeline", RecordingPipeline)
+    service = transcription_module.TranscriptionService(db=database, config=config_store)
+    pipeline = service.create_pipeline(FakeFrames([]), speaker="other", source="system")
+
+    await service.shutdown()
+
+    assert (pipeline.stops, pipeline.unloads) == (1, 1)

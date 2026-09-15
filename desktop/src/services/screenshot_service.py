@@ -211,12 +211,17 @@ class ScreenshotService(ServiceBase):
         cfg = self._config.config
         provider = self._env.provider_for("screenshot")
         context = await self._recent_conversation(cfg.conversation.context_messages)
+        # Read the local interview-notes file once per request (empty when
+        # disabled/missing); only its length may ever be logged.
+        notes_text = cfg.interview_notes_text
         try:
             messages = build_vision_messages(
                 system_prompt=cfg.prompts.screenshot,
                 image_data_url=image_data_url,
                 resume_context=cfg.resume_context,
                 resume_hint=cfg.resume_hint,
+                interview_notes=notes_text,
+                notes_hint=cfg.interview_notes_hint,
                 context=context,
             )
         except VisionPayloadError as exc:
@@ -232,6 +237,7 @@ class ScreenshotService(ServiceBase):
                 provider.model,
                 context_messages=len(context),
                 resume_chars=len(cfg.resume_context),
+                notes_chars=len(notes_text),
             ),
         )
         job = LlmJob(

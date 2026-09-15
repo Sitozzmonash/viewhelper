@@ -44,6 +44,22 @@ resume:
   hint_enabled: true
   hint_text: "在回答涉及我的经历、项目或能力的问题时，请结合上面【resume_context】中的简历内容来组织答案。"
 
+# interview_notes: a local bulk notes file (e.g. your personal study notes)
+# injected into BOTH the conversation and screenshot system prompts as an
+# 【interview_notes】 block, right after the resume block. Set `path` to your own
+# file: relative paths are resolved against the REPOSITORY ROOT (absolute paths
+# are used as-is). The file is re-read on every request and is NEVER uploaded,
+# sent to the mobile client or written to the logs -- only its length is logged.
+# max_chars: 0 = inject the whole file; >0 = keep the first N characters and
+# append an omission marker. hint_enabled toggles the 【interview_notes】
+# reference line (it is only added when the block itself is non-empty).
+interview_notes:
+  enabled: true
+  path: "docs/my-notes.md"
+  max_chars: 0
+  hint_enabled: true
+  hint_text: "回答面试问题时，请优先参考上面【interview_notes】中的八股要点，并结合【resume_context】里的简历经历组织答案。"
+
 conversation:
   # Number of previous FINAL messages sent as context together with the
   # explicitly marked target message (PRD 9). Range: 1..50.
