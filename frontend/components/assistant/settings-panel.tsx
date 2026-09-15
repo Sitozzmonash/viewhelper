@@ -34,8 +34,6 @@ const DEFAULT_FORM: SettingsForm = {
   show_partial: true,
 }
 
-type ConfirmKind = 'conversation' | 'screenshot' | null
-
 const inputClass =
   'mt-1.5 w-full rounded-2xl border border-border bg-secondary/45 px-3.5 py-2.5 text-sm outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/10 disabled:opacity-50'
 
@@ -46,7 +44,7 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
   const [room, setRoom] = useState(pairing.room)
   const [token, setToken] = useState(pairing.token)
   const [pairSaved, setPairSaved] = useState(false)
-  const [confirm, setConfirm] = useState<ConfirmKind>(null)
+  const [confirm, setConfirm] = useState(false)
 
   // Reflect settings_updated (response to settings_get, or ack of settings_update).
   useEffect(
@@ -94,9 +92,9 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
   }
 
   const confirmClear = () => {
-    if (confirm === 'conversation') send({ type: 'conversation_clear' })
-    else if (confirm === 'screenshot') send({ type: 'screenshot_clear' })
-    setConfirm(null)
+    send({ type: 'conversation_clear' })
+    send({ type: 'screenshot_clear' })
+    setConfirm(false)
   }
 
   return (
@@ -259,23 +257,12 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
           <div className="space-y-2">
             <button
               type="button"
-              onClick={() => setConfirm('conversation')}
+              onClick={() => setConfirm(true)}
               className="flex w-full items-center justify-between rounded-2xl border border-border px-4 py-3.5 text-sm font-medium active:scale-[0.99]"
             >
               <span className="flex items-center gap-2">
                 <Trash2 className="size-4 text-destructive" />
-                清空当前对话
-              </span>
-              <span className="text-xs text-muted-foreground">不可恢复</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirm('screenshot')}
-              className="flex w-full items-center justify-between rounded-2xl border border-border px-4 py-3.5 text-sm font-medium active:scale-[0.99]"
-            >
-              <span className="flex items-center gap-2">
-                <Trash2 className="size-4 text-destructive" />
-                清空截图历史
+                一键清空对话与截图历史
               </span>
               <span className="text-xs text-muted-foreground">不可恢复</span>
             </button>
@@ -297,13 +284,13 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
         <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/40 px-8">
           <div className="w-full max-w-xs rounded-3xl bg-background p-5 shadow-xl">
             <h3 className="text-base font-semibold text-foreground">
-              {confirm === 'conversation' ? '确定清空所有实时对话记录？' : '确定清空所有截图历史？'}
+              确定清空所有对话记录和截图历史？
             </h3>
             <p className="mt-2 text-sm text-muted-foreground">此操作不可恢复。</p>
             <div className="mt-5 flex gap-2">
               <button
                 type="button"
-                onClick={() => setConfirm(null)}
+                onClick={() => setConfirm(false)}
                 className="flex-1 rounded-2xl border border-border py-2.5 text-sm font-medium text-foreground/80 active:scale-[0.98]"
               >
                 取消

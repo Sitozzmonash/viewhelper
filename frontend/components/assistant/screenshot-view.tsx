@@ -168,7 +168,7 @@ export function ScreenshotView() {
                 <img
                   src={selected.preview}
                   alt="PC 截图预览"
-                  className="h-auto max-h-[46vh] w-full object-cover object-top"
+                  className="h-auto max-h-[22vh] w-full object-cover object-top"
                 />
               ) : (
                 <div className="flex aspect-[16/10] w-full items-center justify-center bg-secondary text-xs text-muted-foreground">
