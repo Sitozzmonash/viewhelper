@@ -2,7 +2,8 @@ import { cn } from '@/lib/utils'
 
 /**
  * Full-bleed on phones, a centered device frame on larger screens so the
- * mobile-first layout stays readable on desktop.
+ * mobile-first layout stays readable on desktop. The frame widens from the
+ * ``md`` breakpoint up (tablet/desktop) while phones keep the narrow column.
  */
 export function PhoneShell({
   children,
@@ -18,6 +19,7 @@ export function PhoneShell({
           'relative flex h-dvh w-full max-w-[430px] flex-col overflow-hidden bg-background',
           'sm:h-[880px] sm:max-h-[94dvh] sm:rounded-[2.5rem] sm:border sm:border-border',
           'sm:shadow-[0_30px_80px_-40px_rgba(15,23,42,0.45)]',
+          'md:max-w-[820px]',
           className,
         )}
       >
